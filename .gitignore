@@ -1,0 +1,7 @@
+training_data/stt/audio/
+training_data/translation/
+training_data/training_history.jsonl
+__pycache__/
+*.pyc
+*.pyo
+.env

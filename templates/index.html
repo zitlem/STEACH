@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STEACH — Whisper Fine-Tuning</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --border: #2a2d3a;
+    --accent: #6c63ff;
+    --accent-hover: #837dff;
+    --danger: #e05252;
+    --success: #52c97f;
+    --warning: #e0a852;
+    --text: #e2e5f0;
+    --muted: #8b90a7;
+    --radius: 8px;
+  }
+  body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; line-height: 1.5; }
+  h2 { font-size: 18px; font-weight: 600; margin-bottom: 16px; color: var(--text); }
+  h3 { font-size: 14px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; margin-bottom: 12px; }
+  .page { max-width: 1100px; margin: 0 auto; padding: 24px 16px 80px; }
+  .header { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
+  .header h1 { font-size: 22px; font-weight: 700; }
+  .header .tag { background: var(--accent); color: #fff; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
+
+  /* Sections */
+  .section { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; margin-bottom: 24px; }
+  .section-toggle { cursor: pointer; display: flex; align-items: center; gap: 8px; user-select: none; }
+  .section-toggle .arrow { transition: transform .2s; }
+  .section-toggle.collapsed .arrow { transform: rotate(-90deg); }
+  .collapsible-body { margin-top: 16px; }
+  .collapsible-body.hidden { display: none; }
+
+  /* Form controls */
+  input[type=text], input[type=number], textarea, select {
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    color: var(--text); padding: 8px 12px; width: 100%; outline: none; font-size: 14px;
+    transition: border-color .15s;
+  }
+  input[type=text]:focus, input[type=number]:focus, textarea:focus, select:focus { border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 60px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; font-weight: 500; }
+  .form-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 12px; }
+
+  /* Buttons */
+  button, .btn {
+    display: inline-flex; align-items: center; gap: 6px; padding: 8px 16px;
+    border: none; border-radius: var(--radius); font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: background .15s, opacity .15s; white-space: nowrap;
+  }
+  .btn-primary { background: var(--accent); color: #fff; }
+  .btn-primary:hover { background: var(--accent-hover); }
+  .btn-danger { background: var(--danger); color: #fff; }
+  .btn-danger:hover { opacity: .85; }
+  .btn-ghost { background: transparent; color: var(--muted); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--accent); color: var(--text); }
+  .btn-success { background: var(--success); color: #fff; }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* Stats bar */
+  .stats-bar { display: flex; gap: 24px; background: var(--bg); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 16px; }
+  .stat { display: flex; flex-direction: column; gap: 2px; }
+  .stat-value { font-size: 22px; font-weight: 700; color: var(--accent); }
+  .stat-label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+  /* Drop zone */
+  #drop-zone {
+    border: 2px dashed var(--border); border-radius: var(--radius); padding: 32px;
+    text-align: center; color: var(--muted); transition: border-color .2s, background .2s; cursor: pointer;
+  }
+  #drop-zone.drag-over { border-color: var(--accent); background: rgba(108,99,255,.07); }
+  #drop-zone p { margin-top: 6px; font-size: 13px; }
+
+  /* Upload queue */
+  #upload-queue { display: flex; flex-direction: column; gap: 10px; margin-top: 16px; }
+  .upload-item {
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px;
+    display: grid; grid-template-columns: auto 1fr auto; gap: 12px; align-items: start;
+  }
+  .upload-item audio { width: 100%; height: 32px; }
+  .upload-item .file-name { font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+  .upload-item .item-actions { display: flex; flex-direction: column; gap: 6px; align-items: flex-end; }
+
+  /* Dataset table */
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; color: var(--muted); font-weight: 600; border-bottom: 1px solid var(--border); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge-finetuned { background: rgba(108,99,255,.2); color: var(--accent); }
+  .badge-ct2 { background: rgba(82,201,127,.2); color: var(--success); }
+  .badge-lora { background: rgba(224,168,82,.2); color: var(--warning); }
+  .text-muted { color: var(--muted); }
+  .text-mono { font-family: monospace; font-size: 12px; }
+
+  /* Progress */
+  .progress-wrap { background: var(--bg); border-radius: var(--radius); height: 10px; overflow: hidden; margin: 8px 0; }
+  .progress-bar { height: 100%; background: var(--accent); transition: width .4s; border-radius: var(--radius); }
+  .progress-row { display: flex; gap: 24px; font-size: 13px; flex-wrap: wrap; }
+  .progress-kv { display: flex; flex-direction: column; gap: 2px; }
+  .progress-kv span:first-child { font-size: 11px; color: var(--muted); text-transform: uppercase; }
+  .progress-kv span:last-child { font-weight: 700; }
+
+  /* Log */
+  #training-log {
+    background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 12px; height: 200px; overflow-y: auto; font-family: monospace; font-size: 12px;
+    color: #a0c4a0; margin-top: 12px; white-space: pre-wrap; word-break: break-all;
+  }
+
+  /* Import table */
+  .import-row td { padding: 6px 10px; }
+  .import-row input[type=checkbox] { width: auto; }
+  .import-text-input { width: 100%; min-width: 240px; }
+
+  .inline-edit { display: flex; gap: 6px; align-items: center; }
+  .inline-edit input { flex: 1; }
+
+  /* Pagination */
+  .pagination { display: flex; gap: 6px; align-items: center; margin-top: 12px; }
+  .pagination button { padding: 4px 10px; font-size: 12px; }
+
+  .copy-path { font-family: monospace; font-size: 11px; color: var(--muted); max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Alerts */
+  .alert { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-top: 10px; }
+  .alert-err { background: rgba(224,82,82,.12); color: var(--danger); border: 1px solid rgba(224,82,82,.3); }
+  .alert-ok { background: rgba(82,201,127,.12); color: var(--success); border: 1px solid rgba(82,201,127,.3); }
+
+  .flex-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .spacer { flex: 1; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Header -->
+  <div class="header">
+    <h1>STEACH</h1>
+    <span class="tag">TRAINING</span>
+    <span class="text-muted" style="margin-left:auto; font-size:12px;" id="server-status">connecting...</span>
+  </div>
+
+  <!-- ======================================================
+       SECTION 1: Upload Data
+  ====================================================== -->
+  <div class="section">
+    <h2>1 — Upload Training Data</h2>
+
+    <div id="drop-zone">
+      <div style="font-size:28px;">&#8593;</div>
+      <strong>Drop audio files here</strong>
+      <p>WAV · MP3 · M4A · FLAC · OGG · OPUS — or click to browse</p>
+      <input type="file" id="file-input" multiple accept=".wav,.mp3,.m4a,.flac,.ogg,.opus" style="display:none">
+    </div>
+
+    <div id="upload-queue"></div>
+
+    <div style="margin-top:14px; display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <button class="btn btn-primary" id="upload-all-btn" disabled>Add All to Dataset</button>
+      <span id="upload-status" class="text-muted" style="font-size:13px;"></span>
+    </div>
+    <div id="upload-alert"></div>
+  </div>
+
+  <!-- ======================================================
+       SECTION 2: Import from STT DB (collapsible)
+  ====================================================== -->
+  <div class="section">
+    <div class="section-toggle collapsed" id="import-toggle">
+      <span class="arrow">&#9660;</span>
+      <h2 style="margin:0;">2 — Import from STT App Database <span class="text-muted" style="font-weight:400; font-size:13px;">(optional)</span></h2>
+    </div>
+    <div class="collapsible-body hidden" id="import-body">
+      <div style="display:grid; grid-template-columns:1fr auto; gap:10px; align-items:end; margin-bottom:14px;">
+        <div>
+          <label>Database path</label>
+          <input type="text" id="import-db-path" placeholder="/home/ai/STT/transcriptions.db">
+        </div>
+        <button class="btn btn-ghost" id="import-load-btn">Load</button>
+      </div>
+      <div id="import-alert"></div>
+      <div id="import-table-wrap" class="table-wrap" style="display:none;">
+        <table id="import-table">
+          <thead><tr>
+            <th style="width:32px;"><input type="checkbox" id="import-check-all"></th>
+            <th>Timestamp</th>
+            <th>Transcription (edit to correct)</th>
+            <th>Duration</th>
+          </tr></thead>
+          <tbody id="import-tbody"></tbody>
+        </table>
+        <div style="margin-top:12px; display:flex; gap:10px; align-items:center;">
+          <button class="btn btn-primary" id="import-selected-btn">Import Selected</button>
+          <span id="import-selected-count" class="text-muted" style="font-size:13px;"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================
+       SECTION 3: Dataset
+  ====================================================== -->
+  <div class="section">
+    <div class="flex-row" style="margin-bottom:16px;">
+      <h2 style="margin:0;">3 — Dataset</h2>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-sm" id="dataset-refresh-btn">Refresh</button>
+    </div>
+
+    <div class="stats-bar">
+      <div class="stat"><span class="stat-value" id="stat-pairs">0</span><span class="stat-label">Training Pairs</span></div>
+      <div class="stat"><span class="stat-value" id="stat-duration">0s</span><span class="stat-label">Total Audio</span></div>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th style="width:140px;">Audio</th>
+          <th>Transcription</th>
+          <th style="width:70px;">Duration</th>
+          <th style="width:80px;">Source</th>
+          <th style="width:80px;"></th>
+        </tr></thead>
+        <tbody id="dataset-tbody"></tbody>
+      </table>
+    </div>
+    <div id="dataset-empty" class="text-muted" style="text-align:center; padding:24px; display:none;">No training pairs yet — upload audio above.</div>
+    <div class="pagination" id="dataset-pagination"></div>
+  </div>
+
+  <!-- ======================================================
+       SECTION 4: Training
+  ====================================================== -->
+  <div class="section">
+    <h2>4 — Train</h2>
+
+    <div class="form-row" style="margin-bottom:16px;">
+      <div>
+        <label>Base Model</label>
+        <select id="train-base-model">
+          <option value="openai/whisper-tiny">whisper-tiny (~150MB)</option>
+          <option value="openai/whisper-base">whisper-base (~280MB)</option>
+          <option value="openai/whisper-small">whisper-small (~460MB)</option>
+          <option value="openai/whisper-medium" selected>whisper-medium (~1.5GB)</option>
+          <option value="openai/whisper-large-v3">whisper-large-v3 (~3GB)</option>
+        </select>
+      </div>
+      <div>
+        <label>Epochs</label>
+        <input type="number" id="train-epochs" value="3" min="1" max="50">
+      </div>
+      <div>
+        <label>Learning Rate</label>
+        <input type="number" id="train-lr" value="0.0001" step="0.00001">
+      </div>
+      <div>
+        <label>Batch Size</label>
+        <input type="number" id="train-batch" value="4" min="1" max="32">
+      </div>
+      <div>
+        <label>LoRA Rank</label>
+        <input type="number" id="train-lora-rank" value="16" min="4" max="64">
+      </div>
+    </div>
+
+    <div class="flex-row">
+      <button class="btn btn-primary" id="train-start-btn">&#9654; Start Training</button>
+      <button class="btn btn-danger" id="train-stop-btn" disabled>&#9632; Stop</button>
+    </div>
+    <div id="train-alert" style="margin-top:8px;"></div>
+
+    <div id="progress-section" style="margin-top:18px; display:none;">
+      <div class="progress-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
+      <div class="progress-row" style="margin-top:10px;">
+        <div class="progress-kv"><span>Epoch</span><span id="prog-epoch">—</span></div>
+        <div class="progress-kv"><span>Loss</span><span id="prog-loss">—</span></div>
+        <div class="progress-kv"><span>WER</span><span id="prog-wer">—</span></div>
+        <div class="progress-kv"><span>GPU Memory</span><span id="prog-gpu">—</span></div>
+      </div>
+    </div>
+
+    <div id="training-log"></div>
+  </div>
+
+  <!-- ======================================================
+       SECTION 5: Models
+  ====================================================== -->
+  <div class="section">
+    <div class="flex-row" style="margin-bottom:16px;">
+      <h2 style="margin:0;">5 — Models</h2>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost btn-sm" id="models-refresh-btn">Refresh</button>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>Label</th>
+          <th>Name</th>
+          <th>Base Model</th>
+          <th>Format</th>
+          <th>Pairs</th>
+          <th>WER</th>
+          <th>Created</th>
+          <th></th>
+        </tr></thead>
+        <tbody id="models-tbody"></tbody>
+      </table>
+    </div>
+    <div id="models-empty" class="text-muted" style="text-align:center; padding:24px; display:none;">No fine-tuned models yet.</div>
+  </div>
+
+</div><!-- /page -->
+
+<script>
+// ---------------------------------------------------------------------------
+// Socket.IO
+// ---------------------------------------------------------------------------
+const socket = io();
+socket.on("connect", () => { document.getElementById("server-status").textContent = "connected"; });
+socket.on("disconnect", () => { document.getElementById("server-status").textContent = "disconnected"; });
+
+socket.on("training_log", ({ line }) => appendLog(line));
+socket.on("training_progress", (data) => updateProgress(data));
+socket.on("training_done", () => {
+  setTrainingRunning(false);
+  appendLog("[DONE] Training complete.");
+  loadModels();
+});
+socket.on("convert_done", ({ output }) => {
+  appendLog(`[DONE] CTranslate2 model saved: ${output}`);
+  loadModels();
+});
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+function fmtDuration(sec) {
+  if (!sec) return "0s";
+  const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
+  return m ? `${m}m ${s}s` : `${s}s`;
+}
+
+function alert_div(id, msg, type) {
+  const el = document.getElementById(id);
+  if (!msg) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="alert alert-${type === "ok" ? "ok" : "err"}">${msg}</div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Section 2 toggle (collapsible)
+// ---------------------------------------------------------------------------
+document.getElementById("import-toggle").addEventListener("click", () => {
+  const toggle = document.getElementById("import-toggle");
+  const body = document.getElementById("import-body");
+  toggle.classList.toggle("collapsed");
+  body.classList.toggle("hidden");
+});
+
+// ---------------------------------------------------------------------------
+// Section 1: Upload
+// ---------------------------------------------------------------------------
+const dropZone = document.getElementById("drop-zone");
+const fileInput = document.getElementById("file-input");
+const uploadQueue = document.getElementById("upload-queue");
+let queuedFiles = [];
+
+dropZone.addEventListener("click", () => fileInput.click());
+dropZone.addEventListener("dragover", e => { e.preventDefault(); dropZone.classList.add("drag-over"); });
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag-over"));
+dropZone.addEventListener("drop", e => { e.preventDefault(); dropZone.classList.remove("drag-over"); addFiles(e.dataTransfer.files); });
+fileInput.addEventListener("change", () => addFiles(fileInput.files));
+
+function addFiles(fileList) {
+  for (const f of fileList) queuedFiles.push({ file: f, text: "" });
+  renderQueue();
+}
+
+function renderQueue() {
+  uploadQueue.innerHTML = "";
+  document.getElementById("upload-all-btn").disabled = queuedFiles.length === 0;
+  queuedFiles.forEach((item, i) => {
+    const url = URL.createObjectURL(item.file);
+    const div = document.createElement("div");
+    div.className = "upload-item";
+    div.innerHTML = `
+      <div>
+        <audio controls src="${url}" preload="metadata"></audio>
+      </div>
+      <div>
+        <div class="file-name">${item.file.name}</div>
+        <textarea placeholder="Type the correct transcription..." rows="2">${item.text}</textarea>
+      </div>
+      <div class="item-actions">
+        <button class="btn btn-ghost btn-sm" onclick="removeQueueItem(${i})">Remove</button>
+        <button class="btn btn-primary btn-sm" onclick="uploadSingle(${i})">Add</button>
+      </div>`;
+    div.querySelector("textarea").addEventListener("input", e => { queuedFiles[i].text = e.target.value; });
+    uploadQueue.appendChild(div);
+  });
+}
+
+function removeQueueItem(i) {
+  queuedFiles.splice(i, 1);
+  renderQueue();
+}
+
+async function uploadSingle(i) {
+  const item = queuedFiles[i];
+  if (!item.text.trim()) { alert("Please enter the transcription text."); return; }
+  const fd = new FormData();
+  fd.append("audio", item.file);
+  fd.append("text", item.text);
+  const res = await fetch("/api/upload", { method: "POST", body: fd });
+  const data = await res.json();
+  if (data.results?.[0]?.ok) {
+    queuedFiles.splice(i, 1);
+    renderQueue();
+    loadDataset();
+    alert_div("upload-alert", "Added to dataset.", "ok");
+  } else {
+    alert_div("upload-alert", data.results?.[0]?.error || "Upload failed.", "err");
+  }
+}
+
+document.getElementById("upload-all-btn").addEventListener("click", async () => {
+  const valid = queuedFiles.filter(it => it.text.trim());
+  if (!valid.length) { alert("Please enter transcription text for at least one file."); return; }
+  const fd = new FormData();
+  valid.forEach(it => { fd.append("audio", it.file); fd.append("text", it.text); });
+  document.getElementById("upload-status").textContent = "Uploading...";
+  const res = await fetch("/api/upload", { method: "POST", body: fd });
+  const data = await res.json();
+  const ok = data.results.filter(r => r.ok).length;
+  const err = data.results.filter(r => r.error).length;
+  document.getElementById("upload-status").textContent = "";
+  alert_div("upload-alert", `Added ${ok} pair(s).${err ? ` ${err} failed.` : ""}`, ok ? "ok" : "err");
+  queuedFiles = queuedFiles.filter(it => !it.text.trim());
+  renderQueue();
+  loadDataset();
+});
+
+// ---------------------------------------------------------------------------
+// Section 2: DB Import
+// ---------------------------------------------------------------------------
+let importRows = [];
+
+document.getElementById("import-load-btn").addEventListener("click", async () => {
+  const dbPath = document.getElementById("import-db-path").value.trim();
+  const url = dbPath ? `/api/import/transcriptions?db_path=${encodeURIComponent(dbPath)}` : "/api/import/transcriptions";
+  const res = await fetch(url);
+  const data = await res.json();
+  if (data.error) { alert_div("import-alert", data.error, "err"); return; }
+  alert_div("import-alert", "");
+  importRows = data.transcriptions;
+  renderImportTable();
+});
+
+function renderImportTable() {
+  const wrap = document.getElementById("import-table-wrap");
+  const tbody = document.getElementById("import-tbody");
+  if (!importRows.length) { alert_div("import-alert", "No transcriptions found.", "err"); wrap.style.display = "none"; return; }
+  wrap.style.display = "";
+  tbody.innerHTML = "";
+  importRows.forEach((row, i) => {
+    const tr = document.createElement("tr");
+    tr.className = "import-row";
+    tr.innerHTML = `
+      <td><input type="checkbox" class="import-cb" data-i="${i}"></td>
+      <td class="text-mono">${row.timestamp || ""}</td>
+      <td><input type="text" class="import-text-input" value="${(row.text || "").replace(/"/g, "&quot;")}" data-i="${i}"></td>
+      <td>${fmtDuration((row.end_time || 0) - (row.start_time || 0))}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById("import-check-all").addEventListener("change", e => {
+    document.querySelectorAll(".import-cb").forEach(cb => cb.checked = e.target.checked);
+    updateImportCount();
+  });
+  tbody.querySelectorAll(".import-cb").forEach(cb => cb.addEventListener("change", updateImportCount));
+  tbody.querySelectorAll(".import-text-input").forEach(inp => inp.addEventListener("input", e => {
+    importRows[+e.target.dataset.i].corrected_text = e.target.value;
+  }));
+  updateImportCount();
+}
+
+function updateImportCount() {
+  const n = document.querySelectorAll(".import-cb:checked").length;
+  document.getElementById("import-selected-count").textContent = n ? `${n} selected` : "";
+}
+
+document.getElementById("import-selected-btn").addEventListener("click", async () => {
+  const selected = [];
+  document.querySelectorAll(".import-cb:checked").forEach(cb => {
+    const i = +cb.dataset.i;
+    const row = importRows[i];
+    const textInput = document.querySelector(`.import-text-input[data-i="${i}"]`);
+    selected.push({
+      transcription_id: row.id,
+      corrected_text: textInput ? textInput.value.trim() : (row.corrected_text || row.text || ""),
+      audio_path: null,
+    });
+  });
+  if (!selected.length) return;
+  const res = await fetch("/api/import/transcriptions", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(selected),
+  });
+  const data = await res.json();
+  const ok = data.results.filter(r => r.ok).length;
+  alert_div("import-alert", `Imported ${ok} pair(s).`, "ok");
+  loadDataset();
+});
+
+// ---------------------------------------------------------------------------
+// Section 3: Dataset
+// ---------------------------------------------------------------------------
+let datasetPage = 0;
+const PAGE_SIZE = 20;
+let datasetEntries = [];
+
+async function loadDataset() {
+  const res = await fetch("/api/dataset");
+  const data = await res.json();
+  datasetEntries = data.entries || [];
+  document.getElementById("stat-pairs").textContent = data.total || 0;
+  document.getElementById("stat-duration").textContent = fmtDuration(data.total_duration || 0);
+  renderDataset();
+}
+
+function renderDataset() {
+  const tbody = document.getElementById("dataset-tbody");
+  const empty = document.getElementById("dataset-empty");
+  const paginator = document.getElementById("dataset-pagination");
+  tbody.innerHTML = "";
+  paginator.innerHTML = "";
+
+  if (!datasetEntries.length) { empty.style.display = ""; return; }
+  empty.style.display = "none";
+
+  const start = datasetPage * PAGE_SIZE;
+  const page = datasetEntries.slice(start, start + PAGE_SIZE);
+
+  page.forEach(entry => {
+    const tr = document.createElement("tr");
+    const audioCell = entry.audio
+      ? `<audio controls src="/training_data/stt/audio/${entry.audio}" style="width:140px; height:28px;"></audio>`
+      : `<span class="text-muted">—</span>`;
+    tr.innerHTML = `
+      <td>${audioCell}</td>
+      <td>
+        <div class="inline-edit" id="edit-row-${entry.id}">
+          <span>${entry.text}</span>
+          <button class="btn btn-ghost btn-sm" onclick="startEdit(${entry.id})">Edit</button>
+        </div>
+      </td>
+      <td class="text-muted">${fmtDuration(entry.duration)}</td>
+      <td class="text-muted">${entry.source || ""}</td>
+      <td><button class="btn btn-danger btn-sm" onclick="deleteEntry(${entry.id})">Del</button></td>`;
+    tbody.appendChild(tr);
+  });
+
+  const totalPages = Math.ceil(datasetEntries.length / PAGE_SIZE);
+  if (totalPages > 1) {
+    paginator.innerHTML = `
+      <button class="btn btn-ghost btn-sm" onclick="setPage(${datasetPage - 1})" ${datasetPage === 0 ? "disabled" : ""}>&#8592; Prev</button>
+      <span class="text-muted" style="font-size:12px;">Page ${datasetPage + 1} / ${totalPages}</span>
+      <button class="btn btn-ghost btn-sm" onclick="setPage(${datasetPage + 1})" ${datasetPage >= totalPages - 1 ? "disabled" : ""}>Next &#8594;</button>`;
+  }
+}
+
+function setPage(n) {
+  datasetPage = Math.max(0, n);
+  renderDataset();
+}
+
+function startEdit(id) {
+  const row = datasetEntries.find(e => e.id === id);
+  if (!row) return;
+  const div = document.getElementById(`edit-row-${id}`);
+  div.innerHTML = `
+    <input type="text" value="${row.text.replace(/"/g, "&quot;")}">
+    <button class="btn btn-primary btn-sm" onclick="saveEdit(${id})">Save</button>
+    <button class="btn btn-ghost btn-sm" onclick="loadDataset()">Cancel</button>`;
+}
+
+async function saveEdit(id) {
+  const div = document.getElementById(`edit-row-${id}`);
+  const text = div.querySelector("input").value.trim();
+  if (!text) return;
+  await fetch(`/api/dataset/${id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ text }) });
+  loadDataset();
+}
+
+async function deleteEntry(id) {
+  if (!confirm("Delete this training pair?")) return;
+  await fetch(`/api/dataset/${id}`, { method: "DELETE" });
+  loadDataset();
+}
+
+document.getElementById("dataset-refresh-btn").addEventListener("click", loadDataset);
+
+// ---------------------------------------------------------------------------
+// Section 4: Training
+// ---------------------------------------------------------------------------
+function setTrainingRunning(running) {
+  document.getElementById("train-start-btn").disabled = running;
+  document.getElementById("train-stop-btn").disabled = !running;
+  if (running) document.getElementById("progress-section").style.display = "";
+}
+
+document.getElementById("train-start-btn").addEventListener("click", async () => {
+  alert_div("train-alert", "");
+  const payload = {
+    base_model: document.getElementById("train-base-model").value,
+    epochs: +document.getElementById("train-epochs").value,
+    learning_rate: +document.getElementById("train-lr").value,
+    batch_size: +document.getElementById("train-batch").value,
+    lora_rank: +document.getElementById("train-lora-rank").value,
+  };
+  const res = await fetch("/api/start_training", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const data = await res.json();
+  if (data.error) { alert_div("train-alert", data.error, "err"); return; }
+  setTrainingRunning(true);
+  document.getElementById("training-log").textContent = "";
+});
+
+document.getElementById("train-stop-btn").addEventListener("click", async () => {
+  await fetch("/api/stop_training", { method: "POST" });
+  setTrainingRunning(false);
+});
+
+function updateProgress(data) {
+  const pct = data.total_epochs ? Math.round((data.epoch / data.total_epochs) * 100) : 0;
+  document.getElementById("progress-bar").style.width = pct + "%";
+  document.getElementById("prog-epoch").textContent = `${data.epoch} / ${data.total_epochs}`;
+  document.getElementById("prog-loss").textContent = data.loss ?? "—";
+  document.getElementById("prog-wer").textContent = data.wer != null ? (data.wer * 100).toFixed(1) + "%" : "—";
+  document.getElementById("prog-gpu").textContent = data.gpu_mb ? `${data.gpu_mb} MB` : "—";
+}
+
+function appendLog(line) {
+  const el = document.getElementById("training-log");
+  el.textContent += line + "\n";
+  el.scrollTop = el.scrollHeight;
+}
+
+// Check if training is already running on page load
+fetch("/api/training_status").then(r => r.json()).then(d => { if (d.running) setTrainingRunning(true); });
+
+// ---------------------------------------------------------------------------
+// Section 5: Models
+// ---------------------------------------------------------------------------
+async function loadModels() {
+  const res = await fetch("/api/models");
+  const data = await res.json();
+  const tbody = document.getElementById("models-tbody");
+  const empty = document.getElementById("models-empty");
+  tbody.innerHTML = "";
+  if (!data.models.length) { empty.style.display = ""; return; }
+  empty.style.display = "none";
+
+  data.models.forEach(m => {
+    const tr = document.createElement("tr");
+    const formatBadge = m.format === "CTranslate2"
+      ? `<span class="badge badge-ct2">CTranslate2</span>`
+      : `<span class="badge badge-lora">LoRA</span>`;
+    const convertBtn = m.format !== "CTranslate2"
+      ? `<button class="btn btn-ghost btn-sm" onclick="convertModel('${m.path}')">Convert</button>`
+      : "";
+    tr.innerHTML = `
+      <td><span class="badge badge-finetuned">Fine-tuned</span></td>
+      <td class="text-mono" title="${m.path}">${m.name}</td>
+      <td class="text-muted">${m.base_model}</td>
+      <td>${formatBadge}</td>
+      <td class="text-muted">${m.pair_count || "—"}</td>
+      <td class="text-muted">${m.wer != null ? (m.wer * 100).toFixed(1) + "%" : "—"}</td>
+      <td class="text-muted">${m.created_at || ""}</td>
+      <td style="display:flex; gap:6px; flex-wrap:wrap;">
+        ${convertBtn}
+        <button class="btn btn-ghost btn-sm" onclick="copyPath('${m.path}')">Copy Path</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteModel('${m.name}')">Del</button>
+      </td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function convertModel(path) {
+  const res = await fetch("/api/convert_model", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ model_path: path }) });
+  const data = await res.json();
+  if (data.error) appendLog("[ERROR] " + data.error);
+  else appendLog("[INFO] Conversion started...");
+  document.getElementById("progress-section").style.display = "";
+}
+
+function copyPath(path) {
+  navigator.clipboard.writeText(path).then(() => alert("Path copied to clipboard."));
+}
+
+async function deleteModel(name) {
+  if (!confirm(`Delete model "${name}"?`)) return;
+  await fetch(`/api/models/${name}`, { method: "DELETE" });
+  loadModels();
+}
+
+document.getElementById("models-refresh-btn").addEventListener("click", loadModels);
+
+// ---------------------------------------------------------------------------
+// Init
+// ---------------------------------------------------------------------------
+loadDataset();
+loadModels();
+</script>
+</body>
+</html>
