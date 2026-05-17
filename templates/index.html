@@ -250,7 +250,7 @@
             <th>Time</th>
             <th>Transcription (edit to correct)</th>
             <th style="width:70px;">Duration</th>
-            <th style="width:70px;">Audio</th>
+            <th style="width:90px;">Preview</th>
           </tr></thead>
           <tbody id="import-tbody"></tbody>
         </table>
@@ -590,6 +590,21 @@ async function addTlPair(i) {
 }
 
 // ---------------------------------------------------------------------------
+// Shared audio preview player (reused across import rows)
+// ---------------------------------------------------------------------------
+const _previewAudio = new Audio();
+
+function previewSegment(i) {
+  const row = importRows[i];
+  const wavPath = document.getElementById("import-wav-path").value.trim();
+  if (!wavPath) { alert("Select a WAV file first."); return; }
+  const url = `/api/preview_audio?wav=${encodeURIComponent(wavPath)}&start=${row.start_time}&end=${row.end_time}`;
+  _previewAudio.pause();
+  _previewAudio.src = url;
+  _previewAudio.play();
+}
+
+// ---------------------------------------------------------------------------
 // Section 2: STT DB Import (collapsible)
 // ---------------------------------------------------------------------------
 let importRows = [];
@@ -628,15 +643,16 @@ function renderImportTable() {
   tbody.innerHTML = "";
   importRows.forEach((row, i) => {
     const hasAudio = (row.end_time || 0) > (row.start_time || 0);
-    const audioBadge = hasAudio
-      ? `<span style="color:var(--success);font-size:16px;" title="${fmtDuration((row.end_time||0)-(row.start_time||0))}">✓</span>`
+    const wavPath = () => document.getElementById("import-wav-path").value.trim();
+    const previewCell = hasAudio
+      ? `<button class="btn btn-ghost btn-sm" onclick="previewSegment(${i})" title="Play audio">▶</button>`
       : `<span class="text-muted">—</span>`;
     const tr = document.createElement("tr");
     tr.innerHTML = `<td><input type="checkbox" class="import-cb" data-i="${i}"></td>
       <td class="text-mono" style="font-size:11px;">${(row.start_time||0).toFixed(1)}s</td>
       <td><input type="text" class="import-text-input" value="${(row.text || "").replace(/"/g, "&quot;")}" data-i="${i}"></td>
       <td class="text-muted">${fmtDuration((row.end_time||0)-(row.start_time||0))}</td>
-      <td style="text-align:center;">${audioBadge}</td>`;
+      <td>${previewCell}</td>`;
     tbody.appendChild(tr);
   });
   document.getElementById("import-check-all").addEventListener("change", e => {

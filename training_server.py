@@ -631,6 +631,39 @@ def serve_audio(filename):
     return send_from_directory(str(STT_AUDIO_DIR), filename)
 
 
+@app.route("/api/preview_audio")
+def api_preview_audio():
+    """Stream a sliced, resampled WAV segment for in-browser playback.
+    Query params: wav (path), start (seconds), end (seconds)
+    """
+    import io
+    from flask import Response
+    wav_path = request.args.get("wav", "").strip()
+    try:
+        start = float(request.args.get("start", 0))
+        end = float(request.args.get("end", 0))
+    except ValueError:
+        return jsonify({"error": "invalid timestamps"}), 400
+
+    if not wav_path or not os.path.exists(wav_path):
+        return jsonify({"error": "wav not found"}), 404
+    if end <= start:
+        return jsonify({"error": "invalid range"}), 400
+
+    try:
+        from pydub import AudioSegment as PydubAudio
+        audio = PydubAudio.from_file(wav_path)
+        clip = audio[int(start * 1000):int(end * 1000)]
+        clip = clip.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        buf = io.BytesIO()
+        clip.export(buf, format="wav")
+        buf.seek(0)
+        return Response(buf.read(), mimetype="audio/wav",
+                        headers={"Content-Disposition": "inline"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/models/<path:model_name>", methods=["DELETE"])
 def api_model_delete(model_name):
     import shutil
