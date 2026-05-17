@@ -20,5 +20,14 @@
     "fp16": true,
     "gradient_checkpointing": true,
     "min_samples": 10
+  },
+  "translation": {
+    "base_model": "/home/ai/STT/models/facebook--nllb-200-distilled-600M",
+    "lora_rank": 16,
+    "lora_alpha": 32,
+    "learning_rate": 0.0001,
+    "epochs": 3,
+    "batch_size": 8,
+    "min_samples": 10
   }
 }

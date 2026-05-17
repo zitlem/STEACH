@@ -31,10 +31,16 @@ MODELS_OUTPUT_DIR = Path(CONFIG["paths"]["models_output_dir"])
 MAIN_APP_DB = CONFIG["paths"]["main_app_db"]
 MAIN_APP_AUDIO_BACKUP = CONFIG["paths"]["main_app_audio_backup"]
 
+TRANSLATION_DIR = TRAINING_DATA_DIR / "translation"
+TRANSLATION_MANIFEST = TRANSLATION_DIR / "manifest.jsonl"
+
 STT_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
+TRANSLATION_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 if not STT_MANIFEST.exists():
     STT_MANIFEST.write_text("")
+if not TRANSLATION_MANIFEST.exists():
+    TRANSLATION_MANIFEST.write_text("")
 
 # ---------------------------------------------------------------------------
 # App
@@ -51,11 +57,12 @@ _training_lock = threading.Lock()
 # Manifest helpers
 # ---------------------------------------------------------------------------
 
-def read_manifest():
+def read_manifest(path=None):
+    path = path or STT_MANIFEST
     entries = []
-    if not STT_MANIFEST.exists():
+    if not Path(path).exists():
         return entries
-    with open(STT_MANIFEST) as f:
+    with open(path) as f:
         for i, line in enumerate(f):
             line = line.strip()
             if not line:
@@ -69,16 +76,18 @@ def read_manifest():
     return entries
 
 
-def write_manifest(entries):
-    with open(STT_MANIFEST, "w") as f:
+def write_manifest(entries, path=None):
+    path = path or STT_MANIFEST
+    with open(path, "w") as f:
         for e in entries:
             row = {k: v for k, v in e.items() if k != "id"}
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
-def append_manifest(entry):
+def append_manifest(entry, path=None):
+    path = path or STT_MANIFEST
     row = {k: v for k, v in entry.items() if k != "id"}
-    with open(STT_MANIFEST, "a") as f:
+    with open(path, "a") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 # ---------------------------------------------------------------------------
@@ -125,6 +134,66 @@ def api_dataset_delete(entry_id):
     entries.pop(entry_id)
     write_manifest(entries)
     return jsonify({"ok": True})
+
+
+# --- Translation dataset ---
+
+@app.route("/api/dataset/translation")
+def api_translation_dataset():
+    entries = read_manifest(TRANSLATION_MANIFEST)
+    return jsonify({"entries": entries, "total": len(entries)})
+
+
+@app.route("/api/dataset/translation/<int:entry_id>", methods=["PUT"])
+def api_translation_update(entry_id):
+    data = request.get_json()
+    entries = read_manifest(TRANSLATION_MANIFEST)
+    if entry_id >= len(entries):
+        return jsonify({"error": "not found"}), 404
+    if "source" in data:
+        entries[entry_id]["source"] = data["source"].strip()
+    if "target" in data:
+        entries[entry_id]["target"] = data["target"].strip()
+    write_manifest(entries, TRANSLATION_MANIFEST)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/dataset/translation/<int:entry_id>", methods=["DELETE"])
+def api_translation_delete(entry_id):
+    entries = read_manifest(TRANSLATION_MANIFEST)
+    if entry_id >= len(entries):
+        return jsonify({"error": "not found"}), 404
+    entries.pop(entry_id)
+    write_manifest(entries, TRANSLATION_MANIFEST)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/upload/translation", methods=["POST"])
+def api_upload_translation():
+    """Save one or more source→target text pairs to the translation manifest.
+
+    Expects JSON: [{source, target, source_lang, target_lang}]
+    """
+    items = request.get_json()
+    if not items:
+        return jsonify({"error": "empty body"}), 400
+    results = []
+    for item in items:
+        source = item.get("source", "").strip()
+        target = item.get("target", "").strip()
+        if not source or not target:
+            results.append({"error": "source and target required"})
+            continue
+        entry = {
+            "source": source,
+            "target": target,
+            "source_lang": item.get("source_lang", ""),
+            "target_lang": item.get("target_lang", ""),
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        append_manifest(entry, TRANSLATION_MANIFEST)
+        results.append({"ok": True})
+    return jsonify({"results": results})
 
 
 # --- Upload ---
@@ -261,30 +330,56 @@ def api_start_training():
         if _training_proc and _training_proc.poll() is None:
             return jsonify({"error": "training already running"}), 409
 
-        entries = read_manifest()
-        valid = [e for e in entries if e.get("audio") and e.get("text")]
-        min_samples = CONFIG["training"].get("min_samples", 10)
-        if len(valid) < min_samples:
-            return jsonify({"error": f"need at least {min_samples} samples (have {len(valid)})"}), 400
-
         data = request.get_json() or {}
-        base_model = data.get("base_model", CONFIG["training"]["base_model"])
-        epochs = int(data.get("epochs", CONFIG["training"]["epochs"]))
-        lr = float(data.get("learning_rate", CONFIG["training"]["learning_rate"]))
-        batch_size = int(data.get("batch_size", CONFIG["training"]["batch_size"]))
-        lora_rank = int(data.get("lora_rank", CONFIG["training"]["lora_rank"]))
+        model_type = data.get("model_type", "stt")
 
-        cmd = [
-            sys.executable, "finetune_whisper.py",
-            "--base_model", base_model,
-            "--epochs", str(epochs),
-            "--lr", str(lr),
-            "--batch_size", str(batch_size),
-            "--lora_rank", str(lora_rank),
-            "--manifest", str(STT_MANIFEST),
-            "--audio_dir", str(STT_AUDIO_DIR),
-            "--output_dir", str(MODELS_OUTPUT_DIR),
-        ]
+        if model_type == "translation":
+            cfg = CONFIG["translation"]
+            entries = read_manifest(TRANSLATION_MANIFEST)
+            valid = [e for e in entries if e.get("source") and e.get("target")]
+            min_samples = cfg.get("min_samples", 10)
+            if len(valid) < min_samples:
+                return jsonify({"error": f"need at least {min_samples} translation pairs (have {len(valid)})"}), 400
+            base_model = data.get("base_model", cfg["base_model"])
+            epochs = int(data.get("epochs", cfg["epochs"]))
+            lr = float(data.get("learning_rate", cfg["learning_rate"]))
+            batch_size = int(data.get("batch_size", cfg["batch_size"]))
+            lora_rank = int(data.get("lora_rank", cfg["lora_rank"]))
+            cmd = [
+                sys.executable, "finetune_whisper.py",
+                "--model_type", "translation",
+                "--base_model", base_model,
+                "--epochs", str(epochs),
+                "--lr", str(lr),
+                "--batch_size", str(batch_size),
+                "--lora_rank", str(lora_rank),
+                "--manifest", str(TRANSLATION_MANIFEST),
+                "--output_dir", str(MODELS_OUTPUT_DIR),
+            ]
+        else:
+            cfg = CONFIG["training"]
+            entries = read_manifest(STT_MANIFEST)
+            valid = [e for e in entries if e.get("audio") and e.get("text")]
+            min_samples = cfg.get("min_samples", 10)
+            if len(valid) < min_samples:
+                return jsonify({"error": f"need at least {min_samples} samples (have {len(valid)})"}), 400
+            base_model = data.get("base_model", cfg["base_model"])
+            epochs = int(data.get("epochs", cfg["epochs"]))
+            lr = float(data.get("learning_rate", cfg["learning_rate"]))
+            batch_size = int(data.get("batch_size", cfg["batch_size"]))
+            lora_rank = int(data.get("lora_rank", cfg["lora_rank"]))
+            cmd = [
+                sys.executable, "finetune_whisper.py",
+                "--model_type", "stt",
+                "--base_model", base_model,
+                "--epochs", str(epochs),
+                "--lr", str(lr),
+                "--batch_size", str(batch_size),
+                "--lora_rank", str(lora_rank),
+                "--manifest", str(STT_MANIFEST),
+                "--audio_dir", str(STT_AUDIO_DIR),
+                "--output_dir", str(MODELS_OUTPUT_DIR),
+            ]
 
         _training_proc = subprocess.Popen(
             cmd,
@@ -391,9 +486,11 @@ def api_models():
             "path": str(p),
             "format": "CTranslate2" if is_ct2 else "LoRA",
             "label": "Fine-tuned",
+            "model_type": meta.get("model_type", "stt"),
             "base_model": meta.get("base_model", ""),
             "pair_count": meta.get("pair_count", 0),
             "wer": meta.get("wer"),
+            "bleu": meta.get("bleu"),
             "created_at": meta.get("created_at", ""),
         })
 
