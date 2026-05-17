@@ -490,6 +490,7 @@ def _discover_nllb_models():
 def api_config():
     return jsonify({
         "main_app_db": MAIN_APP_DB,
+        "main_app_audio_backup": MAIN_APP_AUDIO_BACKUP,
         "nllb_models": _discover_nllb_models(),
     })
 

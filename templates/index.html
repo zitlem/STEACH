@@ -182,7 +182,7 @@
           <label>STT App Database path</label>
           <input type="text" id="tl-db-path" placeholder="e.g. /home/ai/STT/transcriptions.db">
         </div>
-        <button class="btn btn-ghost" onclick="fpOpen('tl-db-path','/home')">Browse</button>
+        <button class="btn btn-ghost" onclick="fpOpen('tl-db-path',window._backupDir||'/home')">Browse</button>
         <button class="btn btn-ghost" id="tl-load-btn">Load</button>
       </div>
       <div id="tl-alert"></div>
@@ -232,7 +232,7 @@
           <label>Session Database (.db)</label>
           <input type="text" id="import-db-path" placeholder="e.g. /home/ai/STT/_AUTOMATIC_BACKUP/2026/05/session.db">
         </div>
-        <button class="btn btn-ghost" onclick="fpOpen('import-db-path','/home')">Browse</button>
+        <button class="btn btn-ghost" onclick="fpOpen('import-db-path',window._backupDir||'/home')">Browse</button>
         <button class="btn btn-ghost" id="import-load-btn">Load</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:14px;">
@@ -240,7 +240,7 @@
           <label>Session Audio (.wav) <span id="import-wav-note" class="text-muted" style="font-size:11px;font-weight:400;"></span></label>
           <input type="text" id="import-wav-path" placeholder="Auto-detected or browse to select companion WAV">
         </div>
-        <button class="btn btn-ghost" onclick="fpOpen('import-wav-path','/home')">Browse</button>
+        <button class="btn btn-ghost" onclick="fpOpen('import-wav-path',window._backupDir||'/home')">Browse</button>
       </div>
       <div id="import-alert"></div>
       <div id="import-table-wrap" class="table-wrap" style="display:none;">
@@ -1040,6 +1040,9 @@ async function loadAppConfig() {
       document.getElementById("tl-db-path").placeholder = cfg.main_app_db;
       document.getElementById("import-db-path").placeholder = cfg.main_app_db;
     }
+
+    // Store backup dir for Browse button defaults
+    window._backupDir = cfg.main_app_audio_backup || "/home";
 
     // Populate NLLB model dropdown dynamically
     const sel = document.getElementById("train-tl-base-model");
