@@ -227,27 +227,36 @@
       <h2 style="margin:0;">2 — Import Audio from STT Backup <span class="text-muted" style="font-weight:400;font-size:13px;">(optional, for STT training)</span></h2>
     </div>
     <div class="collapsible-body hidden" id="import-body">
-      <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:end;margin-bottom:14px;">
+      <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:end;margin-bottom:10px;">
         <div>
-          <label>Database path</label>
-          <input type="text" id="import-db-path" placeholder="e.g. /home/ai/STT/transcriptions.db">
+          <label>Session Database (.db)</label>
+          <input type="text" id="import-db-path" placeholder="e.g. /home/ai/STT/_AUTOMATIC_BACKUP/2026/05/session.db">
         </div>
         <button class="btn btn-ghost" onclick="fpOpen('import-db-path','/home')">Browse</button>
         <button class="btn btn-ghost" id="import-load-btn">Load</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:14px;">
+        <div>
+          <label>Session Audio (.wav) <span id="import-wav-note" class="text-muted" style="font-size:11px;font-weight:400;"></span></label>
+          <input type="text" id="import-wav-path" placeholder="Auto-detected or browse to select companion WAV">
+        </div>
+        <button class="btn btn-ghost" onclick="fpOpen('import-wav-path','/home')">Browse</button>
       </div>
       <div id="import-alert"></div>
       <div id="import-table-wrap" class="table-wrap" style="display:none;">
         <table id="import-table">
           <thead><tr>
             <th style="width:32px;"><input type="checkbox" id="import-check-all"></th>
-            <th>Timestamp</th>
+            <th>Time</th>
             <th>Transcription (edit to correct)</th>
-            <th>Duration</th>
+            <th style="width:70px;">Duration</th>
+            <th style="width:70px;">Audio</th>
           </tr></thead>
           <tbody id="import-tbody"></tbody>
         </table>
-        <div style="margin-top:12px;display:flex;gap:10px;align-items:center;">
-          <button class="btn btn-primary" id="import-selected-btn">Import Selected</button>
+        <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <button class="btn btn-primary" id="import-selected-btn">Import with Audio</button>
+          <button class="btn btn-ghost" id="import-textonly-btn">Import Text Only</button>
           <span id="import-selected-count" class="text-muted" style="font-size:13px;"></span>
         </div>
       </div>
@@ -588,6 +597,7 @@ document.getElementById("import-toggle").addEventListener("click", () => {
   document.getElementById("import-toggle").classList.toggle("collapsed");
   document.getElementById("import-body").classList.toggle("hidden");
 });
+
 document.getElementById("import-load-btn").addEventListener("click", async () => {
   const dbPath = document.getElementById("import-db-path").value.trim();
   const url = dbPath ? `/api/import/transcriptions?db_path=${encodeURIComponent(dbPath)}` : "/api/import/transcriptions";
@@ -596,8 +606,20 @@ document.getElementById("import-load-btn").addEventListener("click", async () =>
   if (data.error) { alertDiv("import-alert", data.error, "err"); return; }
   alertDiv("import-alert", "");
   importRows = data.transcriptions;
+
+  // Auto-fill companion WAV if detected
+  const wavNote = document.getElementById("import-wav-note");
+  const wavInput = document.getElementById("import-wav-path");
+  if (data.wav_candidates && data.wav_candidates.length > 0) {
+    wavInput.value = data.wav_candidates[0];
+    wavNote.textContent = `Auto-detected${data.wav_candidates.length > 1 ? ` (${data.wav_candidates.length} found)` : ""}`;
+  } else {
+    wavNote.textContent = "Not found — browse to select";
+  }
+
   renderImportTable();
 });
+
 function renderImportTable() {
   const wrap = document.getElementById("import-table-wrap");
   const tbody = document.getElementById("import-tbody");
@@ -605,11 +627,16 @@ function renderImportTable() {
   wrap.style.display = "";
   tbody.innerHTML = "";
   importRows.forEach((row, i) => {
+    const hasAudio = (row.end_time || 0) > (row.start_time || 0);
+    const audioBadge = hasAudio
+      ? `<span style="color:var(--success);font-size:16px;" title="${fmtDuration((row.end_time||0)-(row.start_time||0))}">✓</span>`
+      : `<span class="text-muted">—</span>`;
     const tr = document.createElement("tr");
     tr.innerHTML = `<td><input type="checkbox" class="import-cb" data-i="${i}"></td>
-      <td class="text-mono">${row.timestamp || ""}</td>
+      <td class="text-mono" style="font-size:11px;">${(row.start_time||0).toFixed(1)}s</td>
       <td><input type="text" class="import-text-input" value="${(row.text || "").replace(/"/g, "&quot;")}" data-i="${i}"></td>
-      <td>${fmtDuration((row.end_time || 0) - (row.start_time || 0))}</td>`;
+      <td class="text-muted">${fmtDuration((row.end_time||0)-(row.start_time||0))}</td>
+      <td style="text-align:center;">${audioBadge}</td>`;
     tbody.appendChild(tr);
   });
   document.getElementById("import-check-all").addEventListener("change", e => {
@@ -619,21 +646,53 @@ function renderImportTable() {
   tbody.querySelectorAll(".import-cb").forEach(cb => cb.addEventListener("change", updateImportCount));
   updateImportCount();
 }
+
 function updateImportCount() {
   const n = document.querySelectorAll(".import-cb:checked").length;
   document.getElementById("import-selected-count").textContent = n ? `${n} selected` : "";
 }
-document.getElementById("import-selected-btn").addEventListener("click", async () => {
-  const selected = [];
+
+function getSelectedSegments() {
+  const segments = [];
   document.querySelectorAll(".import-cb:checked").forEach(cb => {
     const i = +cb.dataset.i;
+    const row = importRows[i];
     const textInput = document.querySelector(`.import-text-input[data-i="${i}"]`);
-    selected.push({ transcription_id: importRows[i].id, corrected_text: textInput ? textInput.value.trim() : importRows[i].text, audio_path: null });
+    segments.push({
+      corrected_text: textInput ? textInput.value.trim() : (row.text || ""),
+      start_time: row.start_time || 0,
+      end_time: row.end_time || 0,
+    });
   });
-  if (!selected.length) return;
-  const res = await fetch("/api/import/transcriptions", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(selected) });
+  return segments;
+}
+
+document.getElementById("import-selected-btn").addEventListener("click", async () => {
+  const segments = getSelectedSegments();
+  if (!segments.length) return;
+  const wavPath = document.getElementById("import-wav-path").value.trim();
+  if (!wavPath) { alertDiv("import-alert", "No WAV file selected. Use 'Import Text Only' for text-only pairs.", "err"); return; }
+  const res = await fetch("/api/import/extract", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wav_path: wavPath, segments }),
+  });
   const data = await res.json();
-  alertDiv("import-alert", `Imported ${data.results.filter(r => r.ok).length} pair(s).`, "ok");
+  if (data.error) { alertDiv("import-alert", data.error, "err"); return; }
+  const ok = data.results.filter(r => r.ok).length;
+  alertDiv("import-alert", `Imported ${ok} pair(s) with audio clips.`, "ok");
+  loadDataset();
+});
+
+document.getElementById("import-textonly-btn").addEventListener("click", async () => {
+  const segments = getSelectedSegments();
+  if (!segments.length) return;
+  const payload = segments.map(s => ({ corrected_text: s.corrected_text, audio_path: null }));
+  const res = await fetch("/api/import/transcriptions", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json();
+  alertDiv("import-alert", `Imported ${data.results.filter(r => r.ok).length} text-only pair(s).`, "ok");
   loadDataset();
 });
 

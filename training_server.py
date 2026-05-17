@@ -259,6 +259,20 @@ def api_upload():
 
 # --- DB Import (read-only from main STT app) ---
 
+def _find_companion_wav(db_path: str) -> list:
+    """Find WAV files in the same directory that share the DB's timestamp prefix."""
+    db = Path(db_path)
+    prefix = db.stem[:10]  # first 10 chars covers YYYY-MM-DD
+    try:
+        candidates = sorted(
+            str(p) for p in db.parent.iterdir()
+            if p.suffix.lower() == ".wav" and p.stem.startswith(prefix)
+        )
+    except Exception:
+        candidates = []
+    return candidates
+
+
 @app.route("/api/import/transcriptions")
 def api_import_list():
     db_path = request.args.get("db_path", MAIN_APP_DB)
@@ -269,9 +283,11 @@ def api_import_list():
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 "SELECT id, timestamp, text, start_time, end_time FROM transcriptions "
-                "WHERE text IS NOT NULL AND trim(text) != '' ORDER BY id DESC LIMIT 500"
+                "WHERE text IS NOT NULL AND trim(text) != '' AND start_time IS NOT NULL "
+                "ORDER BY start_time ASC LIMIT 1000"
             ).fetchall()
-        return jsonify({"transcriptions": [dict(r) for r in rows]})
+        wav_candidates = _find_companion_wav(db_path)
+        return jsonify({"transcriptions": [dict(r) for r in rows], "wav_candidates": wav_candidates})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -317,6 +333,70 @@ def api_import_save():
         }
         append_manifest(entry)
         results.append({"ok": True})
+
+    return jsonify({"results": results})
+
+
+@app.route("/api/import/extract", methods=["POST"])
+def api_import_extract():
+    """Extract audio clips from a session WAV using DB timestamps.
+
+    Accepts JSON:
+    {
+      "wav_path": "/path/to/session.wav",
+      "segments": [{"corrected_text": str, "start_time": float, "end_time": float}]
+    }
+    Slices the WAV, resamples each clip to 16kHz mono, saves to training_data/stt/audio/.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "empty body"}), 400
+
+    wav_path = data.get("wav_path", "").strip()
+    segments = data.get("segments", [])
+
+    if not wav_path or not os.path.exists(wav_path):
+        return jsonify({"error": f"WAV not found: {wav_path}"}), 404
+    if not segments:
+        return jsonify({"error": "no segments provided"}), 400
+
+    from pydub import AudioSegment as PydubAudio
+    try:
+        session_audio = PydubAudio.from_file(wav_path)
+    except Exception as e:
+        return jsonify({"error": f"Failed to load WAV: {e}"}), 500
+
+    results = []
+    for seg in segments:
+        text = seg.get("corrected_text", "").strip()
+        start_time = seg.get("start_time", 0.0)
+        end_time = seg.get("end_time", 0.0)
+
+        if not text:
+            results.append({"error": "empty text"})
+            continue
+        if end_time <= start_time:
+            results.append({"error": "invalid timestamps"})
+            continue
+
+        clip = session_audio[int(start_time * 1000):int(end_time * 1000)]
+        clip = clip.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        clip_name = f"{uuid.uuid4().hex}.wav"
+        try:
+            clip.export(str(STT_AUDIO_DIR / clip_name), format="wav")
+        except Exception as e:
+            results.append({"error": f"Export failed: {e}"})
+            continue
+
+        duration = round(len(clip) / 1000.0, 2)
+        append_manifest({
+            "audio": clip_name,
+            "text": text,
+            "duration": duration,
+            "source": "session_extract",
+            "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        })
+        results.append({"ok": True, "clip": clip_name, "duration": duration})
 
     return jsonify({"results": results})
 
