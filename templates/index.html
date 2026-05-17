@@ -177,12 +177,13 @@
         Load transcriptions from the STT app database, then type the correct translation for each one.
         NLLB trains on transcribed text → correct translation pairs.
       </p>
-      <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:12px;">
+      <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:end;margin-bottom:12px;">
         <div>
           <label>STT App Database path</label>
-          <input type="text" id="tl-db-path" placeholder="/home/ai/STT/transcriptions.db">
+          <input type="text" id="tl-db-path" placeholder="e.g. /home/ai/STT/transcriptions.db">
         </div>
-        <button class="btn btn-ghost" id="tl-load-btn">Load Transcriptions</button>
+        <button class="btn btn-ghost" onclick="fpOpen('tl-db-path','/home')">Browse</button>
+        <button class="btn btn-ghost" id="tl-load-btn">Load</button>
       </div>
       <div id="tl-alert"></div>
       <div id="tl-rows-wrap" style="display:none;">
@@ -226,11 +227,12 @@
       <h2 style="margin:0;">2 — Import Audio from STT Backup <span class="text-muted" style="font-weight:400;font-size:13px;">(optional, for STT training)</span></h2>
     </div>
     <div class="collapsible-body hidden" id="import-body">
-      <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:14px;">
+      <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:end;margin-bottom:14px;">
         <div>
           <label>Database path</label>
-          <input type="text" id="import-db-path" placeholder="/home/ai/STT/transcriptions.db">
+          <input type="text" id="import-db-path" placeholder="e.g. /home/ai/STT/transcriptions.db">
         </div>
+        <button class="btn btn-ghost" onclick="fpOpen('import-db-path','/home')">Browse</button>
         <button class="btn btn-ghost" id="import-load-btn">Load</button>
       </div>
       <div id="import-alert"></div>
@@ -349,8 +351,7 @@
         <div>
           <label>NLLB Base Model</label>
           <select id="train-tl-base-model">
-            <option value="/home/ai/STT/models/facebook--nllb-200-distilled-600M">nllb-200-distilled-600M</option>
-            <option value="/home/ai/STT/models/facebook--nllb-200-1.3B">nllb-200-1.3B</option>
+            <option value="">Loading...</option>
           </select>
         </div>
         <div><label>Epochs</label><input type="number" id="train-tl-epochs" value="3" min="1" max="50"></div>
@@ -406,6 +407,25 @@
     <div id="models-empty" class="text-muted" style="text-align:center;padding:24px;display:none;">No fine-tuned models yet.</div>
   </div>
 
+</div>
+
+<!-- File Picker Modal -->
+<div id="filepicker-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:560px;max-width:95vw;max-height:80vh;display:flex;flex-direction:column;">
+    <div style="padding:16px 20px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;">
+      <strong style="flex:1;">Browse</strong>
+      <button class="btn btn-ghost btn-sm" onclick="fpClose()">✕ Close</button>
+    </div>
+    <div style="padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">
+      <button class="btn btn-ghost btn-sm" id="fp-up-btn" onclick="fpUp()">↑ Up</button>
+      <span id="fp-path" class="text-mono" style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+    </div>
+    <div id="fp-list" style="overflow-y:auto;flex:1;padding:8px 0;"></div>
+    <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;">
+      <input type="text" id="fp-selected" style="flex:1;" placeholder="Selected path..." readonly>
+      <button class="btn btn-primary btn-sm" onclick="fpConfirm()">Select</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -865,8 +885,105 @@ async function deleteModel(name) {
 document.getElementById("models-refresh-btn").addEventListener("click", loadModels);
 
 // ---------------------------------------------------------------------------
+// File Picker
+// ---------------------------------------------------------------------------
+let _fpTargetInput = null;
+let _fpCurrentPath = "/home";
+
+function fpOpen(inputId, startPath) {
+  _fpTargetInput = document.getElementById(inputId);
+  const overlay = document.getElementById("filepicker-overlay");
+  overlay.style.display = "flex";
+  fpNavigate(startPath || _fpTargetInput.value || "/home");
+}
+
+function fpClose() {
+  document.getElementById("filepicker-overlay").style.display = "none";
+  _fpTargetInput = null;
+}
+
+async function fpNavigate(path) {
+  _fpCurrentPath = path;
+  document.getElementById("fp-path").textContent = path;
+  document.getElementById("fp-selected").value = "";
+  const res = await fetch(`/api/browse?path=${encodeURIComponent(path)}`);
+  const data = await res.json();
+  if (data.error) { document.getElementById("fp-list").innerHTML = `<div style="padding:16px;color:var(--danger);">${data.error}</div>`; return; }
+  _fpCurrentPath = data.path;
+  document.getElementById("fp-path").textContent = data.path;
+  document.getElementById("fp-up-btn").dataset.parent = data.parent;
+
+  const list = document.getElementById("fp-list");
+  list.innerHTML = "";
+  data.entries.forEach(entry => {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;align-items:center;gap:10px;padding:6px 16px;cursor:pointer;border-radius:4px;";
+    row.innerHTML = `<span style="font-size:16px;">${entry.is_dir ? "📁" : "📄"}</span>
+      <span style="flex:1;font-size:13px;font-family:monospace;">${entry.name}</span>`;
+    row.addEventListener("mouseenter", () => row.style.background = "rgba(255,255,255,.05)");
+    row.addEventListener("mouseleave", () => row.style.background = "");
+    row.addEventListener("click", () => {
+      if (entry.is_dir) {
+        fpNavigate(entry.path);
+      } else {
+        document.getElementById("fp-selected").value = entry.path;
+      }
+    });
+    list.appendChild(row);
+  });
+}
+
+function fpUp() {
+  const parent = document.getElementById("fp-up-btn").dataset.parent;
+  if (parent) fpNavigate(parent);
+}
+
+function fpConfirm() {
+  const selected = document.getElementById("fp-selected").value.trim() || _fpCurrentPath;
+  if (_fpTargetInput && selected) {
+    _fpTargetInput.value = selected;
+    _fpTargetInput.dispatchEvent(new Event("change"));
+  }
+  fpClose();
+}
+
+// Close on overlay click
+document.getElementById("filepicker-overlay").addEventListener("click", e => {
+  if (e.target === document.getElementById("filepicker-overlay")) fpClose();
+});
+
+// ---------------------------------------------------------------------------
+// Config loading
+// ---------------------------------------------------------------------------
+async function loadAppConfig() {
+  try {
+    const res = await fetch("/api/config");
+    const cfg = await res.json();
+
+    // Pre-fill DB path inputs
+    if (cfg.main_app_db) {
+      document.getElementById("tl-db-path").placeholder = cfg.main_app_db;
+      document.getElementById("import-db-path").placeholder = cfg.main_app_db;
+    }
+
+    // Populate NLLB model dropdown dynamically
+    const sel = document.getElementById("train-tl-base-model");
+    sel.innerHTML = "";
+    (cfg.nllb_models || []).forEach(m => {
+      const opt = document.createElement("option");
+      opt.value = m.path;
+      opt.textContent = m.name;
+      sel.appendChild(opt);
+    });
+  } catch (e) {
+    console.warn("Failed to load app config:", e);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Init
 // ---------------------------------------------------------------------------
+loadAppConfig();
 loadDataset();
 loadTranslationDataset();
 loadModels();

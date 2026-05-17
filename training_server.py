@@ -393,6 +393,54 @@ def api_start_training():
     return jsonify({"ok": True})
 
 
+def _discover_nllb_models():
+    models_parent = MODELS_OUTPUT_DIR
+    found = []
+    if models_parent.exists():
+        for p in sorted(models_parent.iterdir()):
+            if p.is_dir() and p.name.startswith("facebook--nllb"):
+                found.append({"name": p.name, "path": str(p)})
+    if not found:
+        fallback = CONFIG["translation"]["base_model"]
+        found.append({"name": Path(fallback).name, "path": fallback})
+    return found
+
+
+@app.route("/api/config")
+def api_config():
+    return jsonify({
+        "main_app_db": MAIN_APP_DB,
+        "nllb_models": _discover_nllb_models(),
+    })
+
+
+@app.route("/api/browse")
+def api_browse():
+    raw = request.args.get("path", "/home")
+    try:
+        p = Path(raw).resolve()
+    except Exception:
+        return jsonify({"error": "invalid path"}), 400
+    if not p.exists():
+        p = p.parent if p.parent.exists() else Path("/home")
+    entries = []
+    try:
+        for child in sorted(p.iterdir(), key=lambda x: (not x.is_dir(), x.name.lower())):
+            try:
+                entries.append({
+                    "name": child.name,
+                    "path": str(child),
+                    "is_dir": child.is_dir(),
+                    "is_file": child.is_file(),
+                })
+            except PermissionError:
+                pass
+    except PermissionError:
+        return jsonify({"error": "permission denied"}), 403
+    parent = str(p.parent) if p.parent != p else str(p)
+    return jsonify({"path": str(p), "parent": parent, "entries": entries})
+
+
 def _stream_training_output():
     global _training_proc
     proc = _training_proc

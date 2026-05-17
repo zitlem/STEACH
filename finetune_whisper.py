@@ -443,7 +443,7 @@ def main():
         emit({"log": f"[WARNING] Merge/convert failed: {e}"})
 
     # --- Save training history ---
-    history_path = Path(args.output_dir).parent / "training_data" / "training_history.jsonl"
+    history_path = Path(args.manifest).parent / "training_history.jsonl"
     try:
         history_path.parent.mkdir(parents=True, exist_ok=True)
         with open(history_path, "a") as f:
