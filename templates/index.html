@@ -132,6 +132,9 @@
   .alert { padding: 10px 14px; border-radius: var(--radius); font-size: 13px; margin-top: 10px; }
   .alert-err { background: rgba(224,82,82,.12); color: var(--danger); border: 1px solid rgba(224,82,82,.3); }
   .alert-ok { background: rgba(82,201,127,.12); color: var(--success); border: 1px solid rgba(82,201,127,.3); }
+  .warn-banner { background: rgba(224,168,82,.12); color: var(--warning); border: 1px solid rgba(224,168,82,.3); border-radius: var(--radius); padding: 10px 14px; font-size: 13px; display:flex; align-items:flex-start; gap:10px; }
+  .warn-banner code { background: rgba(255,255,255,.08); padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 12px; }
+  .warn-banner button { background:none; border:none; color:inherit; cursor:pointer; margin-left:auto; font-size:16px; line-height:1; opacity:.7; flex-shrink:0; }
 
   .flex-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
   .spacer { flex: 1; }
@@ -145,6 +148,7 @@
     <span class="tag">TRAINING</span>
     <span class="text-muted" style="margin-left:auto;font-size:12px;" id="server-status">connecting...</span>
   </div>
+  <div id="warn-banners"></div>
 
   <!-- ======================================================
        SECTION 1: Upload / Add Training Data
@@ -1054,6 +1058,19 @@ async function loadAppConfig() {
   try {
     const res = await fetch("/api/config");
     const cfg = await res.json();
+
+    // Show permission warnings
+    const bannerWrap = document.getElementById("warn-banners");
+    bannerWrap.innerHTML = "";
+    (cfg.warnings || []).forEach(msg => {
+      const parts = msg.split(/(sudo chown[^\s]* \S+ \S+)/);
+      const div = document.createElement("div");
+      div.className = "warn-banner";
+      div.style.marginBottom = "12px";
+      div.innerHTML = parts.map((p, i) => i % 2 === 1 ? `<code>${p}</code>` : p).join("") +
+        `<button onclick="this.parentElement.remove()" title="Dismiss">&times;</button>`;
+      bannerWrap.appendChild(div);
+    });
 
     // Pre-fill DB path inputs
     if (cfg.main_app_db) {

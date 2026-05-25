@@ -37,6 +37,12 @@ TRANSLATION_MANIFEST = TRANSLATION_DIR / "manifest.jsonl"
 STT_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 TRANSLATION_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+if not os.access(MODELS_OUTPUT_DIR, os.W_OK):
+    print(
+        f"\033[33mWARNING: Models directory is not writable by this user.\n"
+        f"  Fix: sudo chown -R {os.getenv('USER', 'ai')} {MODELS_OUTPUT_DIR}\033[0m",
+        flush=True,
+    )
 if not STT_MANIFEST.exists():
     STT_MANIFEST.write_text("")
 if not TRANSLATION_MANIFEST.exists():
@@ -505,10 +511,17 @@ def _discover_nllb_models():
 
 @app.route("/api/config")
 def api_config():
+    warnings = []
+    if not os.access(MODELS_OUTPUT_DIR, os.W_OK):
+        warnings.append(
+            f"Models directory is not writable by this user. "
+            f"Run: sudo chown -R {os.getenv('USER', 'ai')} {MODELS_OUTPUT_DIR}"
+        )
     return jsonify({
         "main_app_db": MAIN_APP_DB,
         "main_app_audio_backup": MAIN_APP_AUDIO_BACKUP,
         "nllb_models": _discover_nllb_models(),
+        "warnings": warnings,
     })
 
 
