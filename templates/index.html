@@ -37,13 +37,14 @@
   .tab-btn.active.translation { color: var(--accent2); border-bottom-color: var(--accent2); }
   .tab-pane { display: none; }
   .tab-pane.active { display: block; }
+  .sub-tabs { display:flex; gap:0; border-bottom:1px solid var(--border); margin-bottom:16px; }
+  .sub-tab-btn { padding:6px 16px; background:none; border:none; border-bottom:2px solid transparent; color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; margin-bottom:-1px; transition:color .15s,border-color .15s; }
+  .sub-tab-btn.active { color:var(--accent2); border-bottom-color:var(--accent2); }
+  .sub-tab-pane { display:none; }
+  .sub-tab-pane.active { display:block; }
 
   /* Collapsible */
-  .section-toggle { cursor: pointer; display: flex; align-items: center; gap: 8px; user-select: none; }
-  .section-toggle .arrow { transition: transform .2s; font-size: 12px; }
-  .section-toggle.collapsed .arrow { transform: rotate(-90deg); }
-  .collapsible-body { margin-top: 16px; }
-  .collapsible-body.hidden { display: none; }
+
 
   /* Form */
   input[type=text], input[type=number], textarea, select {
@@ -152,7 +153,7 @@
     <h2>1 — Add Training Data</h2>
     <div class="tabs">
       <button class="tab-btn active" onclick="switchTab('upload','stt',this)">STT — Audio + Transcription</button>
-      <button class="tab-btn translation" onclick="switchTab('upload','translation',this)">Translation — Transcription + Correct Translation</button>
+      <button class="tab-btn" onclick="switchTab('upload','import',this)">Import from STT DB</button>
     </div>
 
     <!-- STT upload -->
@@ -171,62 +172,8 @@
       <div id="upload-alert"></div>
     </div>
 
-    <!-- Translation upload -->
-    <div class="tab-pane" id="upload-translation">
-      <p class="text-muted" style="margin-bottom:16px;font-size:13px;">
-        Load transcriptions from the STT app database, then type the correct translation for each one.
-        NLLB trains on transcribed text → correct translation pairs.
-      </p>
-      <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:end;margin-bottom:12px;">
-        <div>
-          <label>STT App Database path</label>
-          <input type="text" id="tl-db-path" placeholder="e.g. /home/ai/STT/transcriptions.db">
-        </div>
-        <button class="btn btn-ghost" onclick="fpOpen('tl-db-path',window._backupDir||'/home')">Browse</button>
-        <button class="btn btn-ghost" id="tl-load-btn">Load</button>
-      </div>
-      <div id="tl-alert"></div>
-      <div id="tl-rows-wrap" style="display:none;">
-        <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;">
-          <label style="margin:0;">Source language:</label>
-          <select id="tl-src-lang" style="width:200px;">
-            <option value="rus_Cyrl">Russian (rus_Cyrl)</option>
-            <option value="ukr_Cyrl">Ukrainian (ukr_Cyrl)</option>
-            <option value="deu_Latn">German (deu_Latn)</option>
-            <option value="fra_Latn">French (fra_Latn)</option>
-            <option value="spa_Latn">Spanish (spa_Latn)</option>
-            <option value="zho_Hans">Chinese Simplified (zho_Hans)</option>
-            <option value="ara_Arab">Arabic (ara_Arab)</option>
-          </select>
-          <label style="margin:0;">Target language:</label>
-          <select id="tl-tgt-lang" style="width:200px;">
-            <option value="eng_Latn">English (eng_Latn)</option>
-            <option value="rus_Cyrl">Russian (rus_Cyrl)</option>
-            <option value="deu_Latn">German (deu_Latn)</option>
-            <option value="fra_Latn">French (fra_Latn)</option>
-          </select>
-        </div>
-        <table>
-          <thead><tr>
-            <th>Transcribed Text (source)</th>
-            <th>Correct Translation (target — type here)</th>
-            <th style="width:80px;"></th>
-          </tr></thead>
-          <tbody id="tl-tbody"></tbody>
-        </table>
-      </div>
-    </div>
-  </div>
-
-  <!-- ======================================================
-       SECTION 2: Import from STT DB (for STT training, collapsible)
-  ====================================================== -->
-  <div class="section">
-    <div class="section-toggle collapsed" id="import-toggle">
-      <span class="arrow">&#9660;</span>
-      <h2 style="margin:0;">2 — Import Audio from STT Backup <span class="text-muted" style="font-weight:400;font-size:13px;">(optional, for STT training)</span></h2>
-    </div>
-    <div class="collapsible-body hidden" id="import-body">
+    <!-- Import from STT DB (STT training + Translation training) -->
+    <div class="tab-pane" id="upload-import">
       <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:end;margin-bottom:10px;">
         <div>
           <label>Session Database (.db)</label>
@@ -243,21 +190,61 @@
         <button class="btn btn-ghost" onclick="fpOpen('import-wav-path',window._backupDir||'/home')">Browse</button>
       </div>
       <div id="import-alert"></div>
-      <div id="import-table-wrap" class="table-wrap" style="display:none;">
-        <table id="import-table">
-          <thead><tr>
-            <th style="width:32px;"><input type="checkbox" id="import-check-all"></th>
-            <th>Time</th>
-            <th>Transcription (edit to correct)</th>
-            <th style="width:70px;">Duration</th>
-            <th style="width:90px;">Preview</th>
-          </tr></thead>
-          <tbody id="import-tbody"></tbody>
-        </table>
-        <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-          <button class="btn btn-primary" id="import-selected-btn">Import with Audio</button>
-          <button class="btn btn-ghost" id="import-textonly-btn">Import Text Only</button>
-          <span id="import-selected-count" class="text-muted" style="font-size:13px;"></span>
+      <div id="import-loaded-wrap" style="display:none;margin-top:16px;">
+        <div class="sub-tabs">
+          <button class="sub-tab-btn active" onclick="switchImportMode('stt',this)">STT Training</button>
+          <button class="sub-tab-btn" onclick="switchImportMode('tl',this)">Translation Training</button>
+        </div>
+        <!-- STT Training sub-pane -->
+        <div id="import-stt-pane" class="sub-tab-pane active">
+          <div id="import-table-wrap" class="table-wrap" style="display:none;">
+            <table id="import-table">
+              <thead><tr>
+                <th style="width:32px;"><input type="checkbox" id="import-check-all"></th>
+                <th>Time</th>
+                <th>Transcription (edit to correct)</th>
+                <th style="width:70px;">Duration</th>
+                <th style="width:90px;">Preview</th>
+              </tr></thead>
+              <tbody id="import-tbody"></tbody>
+            </table>
+            <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+              <button class="btn btn-primary" id="import-selected-btn">Import with Audio</button>
+              <button class="btn btn-ghost" id="import-textonly-btn">Import Text Only</button>
+              <span id="import-selected-count" class="text-muted" style="font-size:13px;"></span>
+            </div>
+          </div>
+        </div>
+        <!-- Translation Training sub-pane -->
+        <div id="import-tl-pane" class="sub-tab-pane">
+          <div id="tl-alert"></div>
+          <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+            <label style="margin:0;">Source language:</label>
+            <select id="tl-src-lang" style="width:200px;">
+              <option value="rus_Cyrl">Russian (rus_Cyrl)</option>
+              <option value="ukr_Cyrl">Ukrainian (ukr_Cyrl)</option>
+              <option value="deu_Latn">German (deu_Latn)</option>
+              <option value="fra_Latn">French (fra_Latn)</option>
+              <option value="spa_Latn">Spanish (spa_Latn)</option>
+              <option value="zho_Hans">Chinese Simplified (zho_Hans)</option>
+              <option value="ara_Arab">Arabic (ara_Arab)</option>
+            </select>
+            <label style="margin:0;">Target language:</label>
+            <select id="tl-tgt-lang" style="width:200px;">
+              <option value="eng_Latn">English (eng_Latn)</option>
+              <option value="rus_Cyrl">Russian (rus_Cyrl)</option>
+              <option value="deu_Latn">German (deu_Latn)</option>
+              <option value="fra_Latn">French (fra_Latn)</option>
+            </select>
+          </div>
+          <table>
+            <thead><tr>
+              <th>Transcribed Text (source)</th>
+              <th>Correct Translation (target — type here)</th>
+              <th style="width:80px;"></th>
+            </tr></thead>
+            <tbody id="tl-tbody"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -268,7 +255,7 @@
   ====================================================== -->
   <div class="section">
     <div class="flex-row" style="margin-bottom:16px;">
-      <h2 style="margin:0;">3 — Dataset</h2>
+      <h2 style="margin:0;">2 — Dataset</h2>
       <span class="spacer"></span>
       <button class="btn btn-ghost btn-sm" id="dataset-refresh-btn">Refresh</button>
     </div>
@@ -324,7 +311,7 @@
        SECTION 4: Training
   ====================================================== -->
   <div class="section">
-    <h2>4 — Train</h2>
+    <h2>3 — Train</h2>
 
     <div style="margin-bottom:18px;">
       <label>Model Type</label>
@@ -453,7 +440,7 @@ socket.on("convert_done", ({ output }) => { appendLog(`[DONE] CTranslate2 model:
 // Tabs
 // ---------------------------------------------------------------------------
 function switchTab(group, name, btn) {
-  document.querySelectorAll(`#${group}-stt, #${group}-translation`).forEach(el => el.classList.remove("active"));
+  document.querySelectorAll(`#${group}-stt, #${group}-translation, #${group}-import`).forEach(el => el.classList.remove("active"));
   document.querySelectorAll(`.tabs .tab-btn`).forEach(b => { if (b.closest('.section') === btn.closest('.section')) b.classList.remove("active"); });
   document.getElementById(`${group}-${name}`).classList.add("active");
   btn.classList.add("active");
@@ -538,26 +525,45 @@ document.getElementById("upload-all-btn").addEventListener("click", async () => 
 });
 
 // ---------------------------------------------------------------------------
-// Section 1: Translation — load from DB and add pairs
+// Import from STT DB (merged: STT training + Translation training)
 // ---------------------------------------------------------------------------
+let importRows = [];
 let tlDbRows = [];
 
-document.getElementById("tl-load-btn").addEventListener("click", async () => {
-  const dbPath = document.getElementById("tl-db-path").value.trim();
+document.getElementById("import-load-btn").addEventListener("click", async () => {
+  const dbPath = document.getElementById("import-db-path").value.trim();
   const url = dbPath ? `/api/import/transcriptions?db_path=${encodeURIComponent(dbPath)}` : "/api/import/transcriptions";
   const res = await fetch(url);
   const data = await res.json();
-  if (data.error) { alertDiv("tl-alert", data.error, "err"); return; }
-  alertDiv("tl-alert", "");
+  if (data.error) { alertDiv("import-alert", data.error, "err"); return; }
+  alertDiv("import-alert", "");
+  importRows = data.transcriptions;
   tlDbRows = data.transcriptions;
+
+  const wavNote = document.getElementById("import-wav-note");
+  const wavInput = document.getElementById("import-wav-path");
+  if (data.wav_candidates && data.wav_candidates.length > 0) {
+    wavInput.value = data.wav_candidates[0];
+    wavNote.textContent = `Auto-detected${data.wav_candidates.length > 1 ? ` (${data.wav_candidates.length} found)` : ""}`;
+  } else {
+    wavNote.textContent = "Not found — browse to select";
+  }
+
+  if (!importRows.length) { alertDiv("import-alert", "No transcriptions found.", "err"); return; }
+  document.getElementById("import-loaded-wrap").style.display = "";
+  renderImportTable();
   renderTlRows();
 });
 
+function switchImportMode(mode, btn) {
+  document.querySelectorAll(".sub-tab-btn").forEach(b => b.classList.remove("active"));
+  document.querySelectorAll(".sub-tab-pane").forEach(p => p.classList.remove("active"));
+  btn.classList.add("active");
+  document.getElementById(`import-${mode}-pane`).classList.add("active");
+}
+
 function renderTlRows() {
-  const wrap = document.getElementById("tl-rows-wrap");
   const tbody = document.getElementById("tl-tbody");
-  if (!tlDbRows.length) { alertDiv("tl-alert", "No transcriptions found.", "err"); wrap.style.display = "none"; return; }
-  wrap.style.display = "";
   tbody.innerHTML = "";
   tlDbRows.forEach((row, i) => {
     const tr = document.createElement("tr");
@@ -604,36 +610,6 @@ function previewSegment(i) {
   _previewAudio.play();
 }
 
-// ---------------------------------------------------------------------------
-// Section 2: STT DB Import (collapsible)
-// ---------------------------------------------------------------------------
-let importRows = [];
-document.getElementById("import-toggle").addEventListener("click", () => {
-  document.getElementById("import-toggle").classList.toggle("collapsed");
-  document.getElementById("import-body").classList.toggle("hidden");
-});
-
-document.getElementById("import-load-btn").addEventListener("click", async () => {
-  const dbPath = document.getElementById("import-db-path").value.trim();
-  const url = dbPath ? `/api/import/transcriptions?db_path=${encodeURIComponent(dbPath)}` : "/api/import/transcriptions";
-  const res = await fetch(url);
-  const data = await res.json();
-  if (data.error) { alertDiv("import-alert", data.error, "err"); return; }
-  alertDiv("import-alert", "");
-  importRows = data.transcriptions;
-
-  // Auto-fill companion WAV if detected
-  const wavNote = document.getElementById("import-wav-note");
-  const wavInput = document.getElementById("import-wav-path");
-  if (data.wav_candidates && data.wav_candidates.length > 0) {
-    wavInput.value = data.wav_candidates[0];
-    wavNote.textContent = `Auto-detected${data.wav_candidates.length > 1 ? ` (${data.wav_candidates.length} found)` : ""}`;
-  } else {
-    wavNote.textContent = "Not found — browse to select";
-  }
-
-  renderImportTable();
-});
 
 function renderImportTable() {
   const wrap = document.getElementById("import-table-wrap");
@@ -1037,7 +1013,6 @@ async function loadAppConfig() {
 
     // Pre-fill DB path inputs
     if (cfg.main_app_db) {
-      document.getElementById("tl-db-path").placeholder = cfg.main_app_db;
       document.getElementById("import-db-path").placeholder = cfg.main_app_db;
     }
 
