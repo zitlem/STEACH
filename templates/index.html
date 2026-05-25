@@ -174,10 +174,18 @@
 
     <!-- Import from STT DB (STT training + Translation training) -->
     <div class="tab-pane" id="upload-import">
-      <div style="display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:end;margin-bottom:10px;">
+      <div style="display:grid;grid-template-columns:1fr auto auto auto auto;gap:10px;align-items:end;margin-bottom:10px;">
         <div>
           <label>Session Database (.db)</label>
           <input type="text" id="import-db-path" placeholder="e.g. /home/ai/STT/_AUTOMATIC_BACKUP/2026/05/session.db">
+        </div>
+        <div>
+          <label>Start row</label>
+          <input type="number" id="import-row-start" placeholder="0" min="0" style="width:80px;">
+        </div>
+        <div>
+          <label>End row</label>
+          <input type="number" id="import-row-end" placeholder="all" min="0" style="width:80px;">
         </div>
         <button class="btn btn-ghost" onclick="fpOpen('import-db-path',window._backupDir||'/home')">Browse</button>
         <button class="btn btn-ghost" id="import-load-btn">Load</button>
@@ -190,6 +198,14 @@
         <button class="btn btn-ghost" onclick="fpOpen('import-wav-path',window._backupDir||'/home')">Browse</button>
       </div>
       <div id="import-alert"></div>
+      <div id="import-toggle-row" style="display:none;margin-top:12px;">
+        <button class="btn btn-ghost btn-sm" id="import-toggle-btn" onclick="
+          const w = document.getElementById('import-loaded-wrap');
+          const hidden = w.style.display === 'none';
+          w.style.display = hidden ? '' : 'none';
+          this.textContent = hidden ? '▲ Hide' : '▼ Show';
+        ">▼ Show</button>
+      </div>
       <div id="import-loaded-wrap" style="display:none;margin-top:16px;">
         <div class="sub-tabs">
           <button class="sub-tab-btn active" onclick="switchImportMode('stt',this)">STT Training</button>
@@ -198,27 +214,23 @@
         <!-- STT Training sub-pane -->
         <div id="import-stt-pane" class="sub-tab-pane active">
           <div id="import-table-wrap" class="table-wrap" style="display:none;">
+            <input type="text" id="import-search" placeholder="Search transcriptions..." style="width:100%;margin-bottom:10px;">
             <table id="import-table">
               <thead><tr>
-                <th style="width:32px;"><input type="checkbox" id="import-check-all"></th>
                 <th>Time</th>
                 <th>Transcription (edit to correct)</th>
                 <th style="width:70px;">Duration</th>
                 <th style="width:90px;">Preview</th>
+                <th style="width:80px;"></th>
               </tr></thead>
               <tbody id="import-tbody"></tbody>
             </table>
-            <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-              <button class="btn btn-primary" id="import-selected-btn">Import with Audio</button>
-              <button class="btn btn-ghost" id="import-textonly-btn">Import Text Only</button>
-              <span id="import-selected-count" class="text-muted" style="font-size:13px;"></span>
-            </div>
           </div>
         </div>
         <!-- Translation Training sub-pane -->
         <div id="import-tl-pane" class="sub-tab-pane">
           <div id="tl-alert"></div>
-          <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+          <div style="margin-bottom:14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
             <label style="margin:0;">Source language:</label>
             <select id="tl-src-lang" style="width:200px;">
               <option value="rus_Cyrl">Russian (rus_Cyrl)</option>
@@ -237,10 +249,15 @@
               <option value="fra_Latn">French (fra_Latn)</option>
             </select>
           </div>
+          <div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
+            <span id="tl-summary" class="text-muted" style="font-size:13px;"></span>
+            <button class="btn btn-primary" id="tl-add-all-btn">Add All Translation Pairs</button>
+          </div>
+          <input type="text" id="tl-search" placeholder="Search transcriptions..." style="width:100%;margin-bottom:10px;">
           <table>
             <thead><tr>
               <th>Transcribed Text (source)</th>
-              <th>Correct Translation (target — type here)</th>
+              <th>Correct Translation (target — edit if needed)</th>
               <th style="width:80px;"></th>
             </tr></thead>
             <tbody id="tl-tbody"></tbody>
@@ -532,7 +549,14 @@ let tlDbRows = [];
 
 document.getElementById("import-load-btn").addEventListener("click", async () => {
   const dbPath = document.getElementById("import-db-path").value.trim();
-  const url = dbPath ? `/api/import/transcriptions?db_path=${encodeURIComponent(dbPath)}` : "/api/import/transcriptions";
+  const start = parseInt(document.getElementById("import-row-start").value) || 0;
+  const endVal = document.getElementById("import-row-end").value.trim();
+  const limit = endVal ? Math.max(0, parseInt(endVal) - start) : null;
+
+  let url = dbPath ? `/api/import/transcriptions?db_path=${encodeURIComponent(dbPath)}` : "/api/import/transcriptions";
+  if (start) url += `&offset=${start}`;
+  if (limit !== null) url += `&limit=${limit}`;
+
   const res = await fetch(url);
   const data = await res.json();
   if (data.error) { alertDiv("import-alert", data.error, "err"); return; }
@@ -550,8 +574,14 @@ document.getElementById("import-load-btn").addEventListener("click", async () =>
   }
 
   if (!importRows.length) { alertDiv("import-alert", "No transcriptions found.", "err"); return; }
+  const totalNote = data.total_count > importRows.length ? ` of ${data.total_count} total` : "";
+  alertDiv("import-alert", `Loaded ${importRows.length} rows${totalNote}.`, "ok");
+  const toggleRow = document.getElementById("import-toggle-row");
+  toggleRow.style.display = "";
+  document.getElementById("import-toggle-btn").textContent = "▲ Hide";
   document.getElementById("import-loaded-wrap").style.display = "";
   renderImportTable();
+  updateTlSummary();
   renderTlRows();
 });
 
@@ -562,31 +592,43 @@ function switchImportMode(mode, btn) {
   document.getElementById(`import-${mode}-pane`).classList.add("active");
 }
 
+function updateTlSummary() {
+  const withTl = tlDbRows.filter(r => r.translated_text && r.translated_text.trim()).length;
+  document.getElementById("tl-summary").textContent =
+    `${tlDbRows.length} rows loaded · ${withTl} have translations`;
+}
+
 function renderTlRows() {
   const tbody = document.getElementById("tl-tbody");
+  document.getElementById("tl-search").value = "";
   tbody.innerHTML = "";
   tlDbRows.forEach((row, i) => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td class="text-mono" style="max-width:350px;word-break:break-word;">${row.text || ""}</td>
-      <td><input type="text" placeholder="Type correct translation..." data-i="${i}"></td>
+      <td><input type="text" value="${(row.translated_text || "").replace(/"/g, "&quot;")}" placeholder="Type correct translation..." data-i="${i}"></td>
       <td><button class="btn btn-primary2 btn-sm" onclick="addTlPair(${i})">Add</button></td>`;
     tbody.appendChild(tr);
   });
 }
+
+document.getElementById("tl-search").addEventListener("input", function () {
+  const q = this.value.toLowerCase();
+  document.querySelectorAll("#tl-tbody tr").forEach(tr => {
+    const src = tr.querySelector("td:first-child");
+    tr.style.display = (!q || (src && src.textContent.toLowerCase().includes(q))) ? "" : "none";
+  });
+});
 
 async function addTlPair(i) {
   const row = tlDbRows[i];
   const input = document.querySelector(`#tl-tbody tr:nth-child(${i + 1}) input`);
   const target = input ? input.value.trim() : "";
   if (!target) { alert("Please enter the translation."); return; }
-  const payload = [{
-    source: row.text,
-    target,
-    source_lang: document.getElementById("tl-src-lang").value,
-    target_lang: document.getElementById("tl-tgt-lang").value,
-  }];
-  const res = await fetch("/api/upload/translation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+  const res = await fetch("/api/upload/translation", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify([{ source: row.text, target, source_lang: document.getElementById("tl-src-lang").value, target_lang: document.getElementById("tl-tgt-lang").value }]),
+  });
   const data = await res.json();
   if (data.results?.[0]?.ok) {
     input.value = "";
@@ -594,6 +636,23 @@ async function addTlPair(i) {
     loadTranslationDataset();
   } else alertDiv("tl-alert", data.results?.[0]?.error || "Failed.", "err");
 }
+
+document.getElementById("tl-add-all-btn").addEventListener("click", async () => {
+  const pairs = tlDbRows
+    .filter(r => r.translated_text && r.translated_text.trim())
+    .map(r => ({
+      source: r.text,
+      target: r.translated_text,
+      source_lang: document.getElementById("tl-src-lang").value,
+      target_lang: document.getElementById("tl-tgt-lang").value,
+    }));
+  if (!pairs.length) { alertDiv("tl-alert", "No rows with translations to add.", "err"); return; }
+  const res = await fetch("/api/upload/translation", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pairs) });
+  const data = await res.json();
+  const ok = (data.results || []).filter(r => r.ok).length;
+  alertDiv("tl-alert", `Added ${ok} translation pair(s).`, "ok");
+  loadTranslationDataset();
+});
 
 // ---------------------------------------------------------------------------
 // Shared audio preview player (reused across import rows)
@@ -616,77 +675,62 @@ function renderImportTable() {
   const tbody = document.getElementById("import-tbody");
   if (!importRows.length) { alertDiv("import-alert", "No transcriptions found.", "err"); wrap.style.display = "none"; return; }
   wrap.style.display = "";
+  document.getElementById("import-search").value = "";
   tbody.innerHTML = "";
   importRows.forEach((row, i) => {
     const hasAudio = (row.end_time || 0) > (row.start_time || 0);
-    const wavPath = () => document.getElementById("import-wav-path").value.trim();
     const previewCell = hasAudio
       ? `<button class="btn btn-ghost btn-sm" onclick="previewSegment(${i})" title="Play audio">▶</button>`
       : `<span class="text-muted">—</span>`;
     const tr = document.createElement("tr");
-    tr.innerHTML = `<td><input type="checkbox" class="import-cb" data-i="${i}"></td>
+    tr.innerHTML = `
       <td class="text-mono" style="font-size:11px;">${(row.start_time||0).toFixed(1)}s</td>
       <td><input type="text" class="import-text-input" value="${(row.text || "").replace(/"/g, "&quot;")}" data-i="${i}"></td>
       <td class="text-muted">${fmtDuration((row.end_time||0)-(row.start_time||0))}</td>
-      <td>${previewCell}</td>`;
+      <td>${previewCell}</td>
+      <td><button class="btn btn-primary2 btn-sm" id="import-add-btn-${i}" onclick="addSttRow(${i})">Add</button></td>`;
     tbody.appendChild(tr);
   });
-  document.getElementById("import-check-all").addEventListener("change", e => {
-    document.querySelectorAll(".import-cb").forEach(cb => cb.checked = e.target.checked);
-    updateImportCount();
+}
+
+document.getElementById("import-search").addEventListener("input", function () {
+  const q = this.value.toLowerCase();
+  document.querySelectorAll("#import-tbody tr").forEach(tr => {
+    const input = tr.querySelector(".import-text-input");
+    tr.style.display = (!q || (input && input.value.toLowerCase().includes(q))) ? "" : "none";
   });
-  tbody.querySelectorAll(".import-cb").forEach(cb => cb.addEventListener("change", updateImportCount));
-  updateImportCount();
-}
+});
 
-function updateImportCount() {
-  const n = document.querySelectorAll(".import-cb:checked").length;
-  document.getElementById("import-selected-count").textContent = n ? `${n} selected` : "";
-}
-
-function getSelectedSegments() {
-  const segments = [];
-  document.querySelectorAll(".import-cb:checked").forEach(cb => {
-    const i = +cb.dataset.i;
-    const row = importRows[i];
-    const textInput = document.querySelector(`.import-text-input[data-i="${i}"]`);
-    segments.push({
-      corrected_text: textInput ? textInput.value.trim() : (row.text || ""),
-      start_time: row.start_time || 0,
-      end_time: row.end_time || 0,
-    });
-  });
-  return segments;
-}
-
-document.getElementById("import-selected-btn").addEventListener("click", async () => {
-  const segments = getSelectedSegments();
-  if (!segments.length) return;
+async function addSttRow(i) {
+  const row = importRows[i];
+  const textInput = document.querySelector(`.import-text-input[data-i="${i}"]`);
+  const text = textInput ? textInput.value.trim() : (row.text || "").trim();
+  if (!text) { alert("No transcription text for this row."); return; }
+  const btn = document.getElementById(`import-add-btn-${i}`);
   const wavPath = document.getElementById("import-wav-path").value.trim();
-  if (!wavPath) { alertDiv("import-alert", "No WAV file selected. Use 'Import Text Only' for text-only pairs.", "err"); return; }
-  const res = await fetch("/api/import/extract", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ wav_path: wavPath, segments }),
-  });
-  const data = await res.json();
-  if (data.error) { alertDiv("import-alert", data.error, "err"); return; }
-  const ok = data.results.filter(r => r.ok).length;
-  alertDiv("import-alert", `Imported ${ok} pair(s) with audio clips.`, "ok");
-  loadDataset();
-});
+  const hasAudio = (row.end_time || 0) > (row.start_time || 0);
 
-document.getElementById("import-textonly-btn").addEventListener("click", async () => {
-  const segments = getSelectedSegments();
-  if (!segments.length) return;
-  const payload = segments.map(s => ({ corrected_text: s.corrected_text, audio_path: null }));
-  const res = await fetch("/api/import/transcriptions", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-  const data = await res.json();
-  alertDiv("import-alert", `Imported ${data.results.filter(r => r.ok).length} text-only pair(s).`, "ok");
+  if (wavPath && hasAudio) {
+    const res = await fetch("/api/import/extract", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wav_path: wavPath, segments: [{ corrected_text: text, start_time: row.start_time, end_time: row.end_time }] }),
+    });
+    const data = await res.json();
+    if (data.error || !data.results?.[0]?.ok) { alertDiv("import-alert", data.error || data.results?.[0]?.error || "Failed.", "err"); return; }
+  } else {
+    const res = await fetch("/api/import/transcriptions", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify([{ corrected_text: text, audio_path: null }]),
+    });
+    const data = await res.json();
+    if (!data.results?.[0]?.ok) { alertDiv("import-alert", data.results?.[0]?.error || "Failed.", "err"); return; }
+  }
+
+  btn.textContent = "✓";
+  btn.disabled = true;
   loadDataset();
-});
+}
+
 
 // ---------------------------------------------------------------------------
 // Section 3: STT Dataset

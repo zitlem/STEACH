@@ -278,16 +278,33 @@ def api_import_list():
     db_path = request.args.get("db_path", MAIN_APP_DB)
     if not os.path.exists(db_path):
         return jsonify({"error": f"DB not found: {db_path}"}), 404
+    offset = int(request.args.get("offset", 0))
+    limit_param = request.args.get("limit")
     try:
         with sqlite3.connect(f"file:{db_path}?immutable=1", uri=True) as conn:
             conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                "SELECT id, timestamp, text, start_time, end_time FROM transcriptions "
-                "WHERE text IS NOT NULL AND trim(text) != '' AND start_time IS NOT NULL "
-                "ORDER BY start_time ASC LIMIT 1000"
-            ).fetchall()
+            where = "WHERE text IS NOT NULL AND trim(text) != '' AND start_time IS NOT NULL"
+            total_count = conn.execute(
+                f"SELECT COUNT(*) FROM transcriptions {where}"
+            ).fetchone()[0]
+            query = (
+                f"SELECT id, timestamp, text, start_time, end_time, translated_text "
+                f"FROM transcriptions {where} ORDER BY start_time ASC"
+            )
+            params = []
+            if limit_param is not None:
+                query += " LIMIT ? OFFSET ?"
+                params = [int(limit_param), offset]
+            elif offset:
+                query += " OFFSET ?"
+                params = [offset]
+            rows = conn.execute(query, params).fetchall()
         wav_candidates = _find_companion_wav(db_path)
-        return jsonify({"transcriptions": [dict(r) for r in rows], "wav_candidates": wav_candidates})
+        return jsonify({
+            "transcriptions": [dict(r) for r in rows],
+            "wav_candidates": wav_candidates,
+            "total_count": total_count,
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
