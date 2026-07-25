@@ -1220,17 +1220,30 @@ function updateJumpCount() {
 function jumpTo(dir) {
   const cat = document.getElementById("jump-cat").value;
   const rows = jumpRows();
-  if (!rows.length) { document.getElementById("jump-count").textContent = "none"; return; }
-  let i = window._jumpIdx[cat];
-  i = (i == null) ? (dir > 0 ? 0 : rows.length - 1) : (i + dir);
-  i = ((i % rows.length) + rows.length) % rows.length;
+  const countEl = document.getElementById("jump-count");
+  if (!rows.length) { countEl.textContent = "none"; return; }
+  // Jump relative to the CURRENT scroll position, not a stored index. Use anchor
+  // lines offset from viewport center so a just-centered row isn't re-selected and
+  // repeated Next/Prev step forward/back. Wrap around at the ends.
+  const tops = rows.map(tr => tr.getBoundingClientRect().top + window.scrollY);
+  let i;
+  if (dir > 0) {
+    const anchor = window.scrollY + window.innerHeight * 0.55;
+    i = tops.findIndex(t => t > anchor + 4);
+    if (i === -1) i = 0;                 // past the last match → wrap to first
+  } else {
+    const anchor = window.scrollY + window.innerHeight * 0.45;
+    i = -1;
+    for (let k = 0; k < tops.length; k++) if (tops[k] < anchor - 4) i = k;
+    if (i === -1) i = rows.length - 1;   // before the first match → wrap to last
+  }
   window._jumpIdx[cat] = i;
   const tr = rows[i];
   tr.scrollIntoView({ behavior: "smooth", block: "center" });
   const prev = tr.style.boxShadow;
   tr.style.boxShadow = "inset 0 0 0 2px var(--accent, #3b82f6)";
   setTimeout(() => { tr.style.boxShadow = prev; }, 1200);
-  updateJumpCount();
+  countEl.textContent = `${i + 1} / ${rows.length}`;
 }
 document.getElementById("jump-cat")?.addEventListener("change", () => updateJumpCount());
 
