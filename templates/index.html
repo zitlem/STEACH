@@ -23,7 +23,7 @@
   }
   body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; line-height: 1.5; }
   h2 { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
-  .page { max-width: 1500px; margin: 0 auto; padding: 24px 16px 130px; }
+  .page { max-width: 1500px; margin: 0 auto; padding: 24px 16px 96px; }
   .header { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
   .header h1 { font-size: 22px; font-weight: 700; }
   .tag { background: var(--accent); color: #fff; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
@@ -493,9 +493,7 @@
 
 <!-- Sticky jump-to-next bar (navigation only) -->
 <div id="jump-bar" style="position:fixed;left:0;right:0;bottom:0;z-index:900;background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -2px 10px rgba(0,0,0,.25);">
-  <div style="max-width:1500px;margin:0 auto;padding:8px 16px;">
-  <div id="section-pills" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:7px;"></div>
-  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+  <div style="max-width:1500px;margin:0 auto;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
     <button class="btn btn-ghost btn-sm" onclick="jumpEdge('top')" title="Jump to top of table">⤒ Top</button>
     <button class="btn btn-ghost btn-sm" onclick="jumpEdge('end')" title="Jump to bottom of table">⤓ End</button>
     <strong style="font-size:13px;white-space:nowrap;">Jump to next:</strong>
@@ -513,7 +511,7 @@
     <button class="btn btn-ghost btn-sm" onclick="jumpTo(-1)">◂ Prev</button>
     <button class="btn btn-primary btn-sm" onclick="jumpTo(1)">Next ▸</button>
     <span id="jump-count" class="text-muted" style="font-size:12px;cursor:pointer;white-space:nowrap;" ondblclick="editJumpPos()" title="Double-click to jump to a position"></span>
-  </div>
+    <div id="section-pills" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto;"></div>
   </div>
 </div>
 
