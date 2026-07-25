@@ -506,6 +506,8 @@
     <button class="btn btn-ghost btn-sm" onclick="jumpTo(-1)">◂ Prev</button>
     <button class="btn btn-primary btn-sm" onclick="jumpTo(1)">Next ▸</button>
     <span id="jump-count" class="text-muted" style="font-size:12px;"></span>
+    <span style="flex:1;"></span>
+    <button class="btn btn-ghost btn-sm" id="stop-audio-btn" onclick="stopPreview()" title="Stop audio (Esc)" disabled>⏹ Stop</button>
   </div>
 </div>
 
@@ -1038,6 +1040,20 @@ document.getElementById("tl-add-all-btn").addEventListener("click", async () => 
 // Shared audio preview player (reused across import rows)
 // ---------------------------------------------------------------------------
 const _previewAudio = new Audio();
+function _setStopBtn(on) {
+  const b = document.getElementById("stop-audio-btn");
+  if (b) b.disabled = !on;
+}
+function stopPreview() {
+  _previewAudio.pause();
+  _previewAudio.currentTime = 0;
+  _setStopBtn(false);
+}
+_previewAudio.addEventListener("playing", () => _setStopBtn(true));
+_previewAudio.addEventListener("play", () => _setStopBtn(true));
+_previewAudio.addEventListener("pause", () => _setStopBtn(false));
+_previewAudio.addEventListener("ended", () => _setStopBtn(false));
+document.addEventListener("keydown", e => { if (e.key === "Escape") stopPreview(); });
 
 function previewSegment(i) {
   const row = importRows[i];
