@@ -591,6 +591,7 @@ document.getElementById("import-load-btn").addEventListener("click", async () =>
   }
 
   if (!importRows.length) { alertDiv("import-alert", "No transcriptions found.", "err"); return; }
+  if (dbPath) rememberState({ db_path: dbPath });  // remember this DB folder for next time
   const totalNote = data.total_count > importRows.length ? ` of ${data.total_count} total` : "";
   alertDiv("import-alert", `Loaded ${importRows.length} rows${totalNote}.`, "ok");
   const toggleRow = document.getElementById("import-toggle-row");
@@ -621,6 +622,7 @@ document.getElementById("yt-autolabel-btn").addEventListener("click", async () =
 
   if (!channel) { alertDiv("yt-alert", "Enter a YouTube channel first.", "err"); return; }
   if (!importRows.length) { alertDiv("yt-alert", "Click Load first to load the DB rows, then Auto-label.", "err"); return; }
+  rememberState({ channel });  // remember the channel for next time
 
   btn.disabled = true;
   const oldLabel = btn.textContent;
@@ -1203,6 +1205,14 @@ document.getElementById("filepicker-overlay").addEventListener("click", e => {
 // ---------------------------------------------------------------------------
 // Config loading
 // ---------------------------------------------------------------------------
+// Persist remembered UI state (channel / last DB path). Fire-and-forget.
+function rememberState(patch) {
+  fetch("/api/remember", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  }).catch(() => {});
+}
+
 async function loadAppConfig() {
   try {
     const res = await fetch("/api/config");
@@ -1229,9 +1239,13 @@ async function loadAppConfig() {
     // Store backup dir for Browse button defaults
     window._backupDir = cfg.main_app_audio_backup || "/home";
 
-    // Pre-fill YouTube channel from config (set once)
-    if (cfg.youtube && cfg.youtube.channel) {
-      document.getElementById("yt-channel").value = cfg.youtube.channel;
+    // Restore remembered channel + last DB location
+    const rem = cfg.remember || {};
+    if (rem.channel) document.getElementById("yt-channel").value = rem.channel;
+    if (rem.db_path) {
+      document.getElementById("import-db-path").value = rem.db_path;
+      const folder = rem.db_path.replace(/\/[^\/]*$/, "");
+      if (folder) window._backupDir = folder;  // Browse opens where the DBs live
     }
 
     // Populate NLLB model dropdown dynamically

@@ -26,6 +26,21 @@ def load_config():
         return json.load(f)
 
 CONFIG = load_config()
+
+# Remembered UI state (channel, last DB path) — kept out of the git-tracked
+# config.json so it never conflicts with a git pull. Gitignored.
+STATE_FILE = Path("ui_state.json")
+
+
+def load_state():
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state):
+    STATE_FILE.write_text(json.dumps(state, indent=2))
 TRAINING_DATA_DIR = Path(CONFIG["paths"]["training_data_dir"])
 STT_DIR = TRAINING_DATA_DIR / "stt"
 STT_AUDIO_DIR = STT_DIR / "audio"
@@ -897,13 +912,34 @@ def api_config():
             f"Models directory is not writable by this user. "
             f"Run: sudo chown -R {os.getenv('USER', 'ai')} {MODELS_OUTPUT_DIR}"
         )
+    state = load_state()
     return jsonify({
         "main_app_db": MAIN_APP_DB,
         "main_app_audio_backup": MAIN_APP_AUDIO_BACKUP,
         "nllb_models": _discover_nllb_models(),
         "youtube": _youtube_cfg(),
+        "remember": {
+            "channel": state.get("channel") or CONFIG.get("youtube", {}).get("channel", ""),
+            "db_path": state.get("db_path", ""),
+        },
         "warnings": warnings,
     })
+
+
+@app.route("/api/remember", methods=["POST"])
+def api_remember():
+    """Persist remembered UI state (channel, last DB path) to ui_state.json."""
+    data = request.get_json() or {}
+    state = load_state()
+    if "channel" in data:
+        state["channel"] = (data.get("channel") or "").strip()
+    if "db_path" in data:
+        state["db_path"] = (data.get("db_path") or "").strip()
+    try:
+        save_state(state)
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+    return jsonify({"ok": True, "remember": state})
 
 
 @app.route("/api/browse")
