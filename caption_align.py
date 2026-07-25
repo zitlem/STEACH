@@ -314,6 +314,44 @@ def _longest_increasing_by_db(pairs: Sequence[Tuple[float, float]]) -> List[Tupl
     return out
 
 
+def caption_coverage(
+    db_rows: Sequence[Dict[str, object]],
+    caption_words: Sequence[Dict[str, object]],
+    anchors: Sequence[Tuple[float, float]],
+    gap_s: float = 2.0,
+) -> List[Dict[str, object]]:
+    """The full YouTube transcript split into segments (by pauses), each flagged
+    `matched` = whether any DB row's time window overlaps it. Unmatched segments are
+    speech YouTube captured but the STT transcription missed. Times are on the session
+    timeline (anchor-mapped)."""
+    pts = sorted(
+        ((map_caption_time(anchors, float(cw["t_s"])), str(cw["word"])) for cw in caption_words),  # type: ignore[arg-type]
+        key=lambda x: x[0],
+    )
+    segments: List[List[Tuple[float, str]]] = []
+    cur: List[Tuple[float, str]] = []
+    for t, w in pts:
+        if cur and t - cur[-1][0] > gap_s:
+            segments.append(cur)
+            cur = []
+        cur.append((t, w))
+    if cur:
+        segments.append(cur)
+
+    bounds = sorted(_row_bounds(r) for r in db_rows)
+    out: List[Dict[str, object]] = []
+    for seg in segments:
+        s, e = seg[0][0], seg[-1][0]
+        matched = any(not (be < s or bs > e) for bs, be in bounds)
+        out.append({
+            "start_s": round(s, 2),
+            "end_s": round(e, 2),
+            "text": " ".join(w for _t, w in seg),
+            "matched": matched,
+        })
+    return out
+
+
 def map_caption_time(anchors: Sequence[Tuple[float, float]], cap_t: float) -> float:
     """Map a caption timestamp to the session timeline via piecewise-linear
     interpolation between anchors (constant-offset extrapolation past the ends).

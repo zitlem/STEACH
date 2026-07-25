@@ -224,6 +224,8 @@
       </div>
       <div id="yt-alert"></div>
       <div id="yt-report" style="display:none;margin-bottom:14px;"></div>
+      <button class="btn btn-ghost btn-sm" id="yt-coverage-btn" style="display:none;margin-bottom:10px;" onclick="toggleCoverage()">▸ Full YouTube transcript (coverage)</button>
+      <div id="yt-coverage" style="display:none;margin-bottom:14px;"></div>
       <button class="btn btn-primary" id="yt-build-btn" style="display:none;margin-bottom:14px;" onclick="ytBuildDataset()">Build training set from reviewed rows</button>
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
         <button class="btn btn-ghost btn-sm" id="yt-debug-btn" onclick="ytDownloadDebug()" title="Download the DB, raw captions and alignment result as a zip for review">⤓ Download debug bundle (DB + captions + alignment)</button>
@@ -711,6 +713,7 @@ async function runAutoLabelPreview(opts = {}) {
          Video: <code>${data.video || ""}</code> &nbsp;|&nbsp; captions: <strong>${data.caption_lang || "?"}</strong> &nbsp;|&nbsp; time offset: ${data.offset}s<br>
          Rows to keep: <strong>${(data.kept || []).length}</strong> &nbsp;|&nbsp; skipped as junk: ${drops}<br>
          Mean caption↔original agreement: <strong>${sim}</strong> (low-match rows: ${rep.low_match_count ?? 0})<br>
+         STT missed: <strong>${data.missed_count ?? 0}</strong> caption segment(s) — speech YouTube caught that STT didn't<br>
          <div class="text-muted" style="font-size:11px;margin-top:6px;">
            Scan the corrected text in the table below (skipped rows are greyed out and excluded).
            Edit anything that looks wrong, then click <strong>Build training set</strong>. Low agreement
@@ -718,6 +721,12 @@ async function runAutoLabelPreview(opts = {}) {
          </div>
        </div>`;
     reportDiv.style.display = "";
+    // Stash the full-transcript coverage for the collapsible view.
+    window._ytCoverage = data.coverage || [];
+    const covBtn = document.getElementById("yt-coverage-btn");
+    document.getElementById("yt-coverage").style.display = "none";
+    covBtn.textContent = `▸ Full YouTube transcript (${(data.missed_count ?? 0)} segment(s) STT missed)`;
+    covBtn.style.display = window._ytCoverage.length ? "" : "none";
     if ((data.kept || []).length) {
       buildBtn.textContent = `Build training set from reviewed rows (${(data.kept || []).length})`;
       buildBtn.style.display = "";
@@ -892,6 +901,35 @@ async function ytDownloadDebug() {
     btn.disabled = false;
     btn.textContent = old;
   }
+}
+
+// Show the full YouTube transcript, highlighting segments STT missed (no DB row).
+function toggleCoverage() {
+  const box = document.getElementById("yt-coverage");
+  const btn = document.getElementById("yt-coverage-btn");
+  if (box.style.display !== "none") {
+    box.style.display = "none";
+    btn.textContent = btn.textContent.replace("▾", "▸");
+    return;
+  }
+  const cov = window._ytCoverage || [];
+  const esc = s => String(s || "").replace(/</g, "&lt;");
+  const fmtT = s => { s = Math.max(0, Math.floor(s)); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; };
+  let html = '<div class="table-wrap" style="padding:10px;max-height:420px;overflow-y:auto;font-size:13px;line-height:1.5;">'
+    + '<div class="text-muted" style="font-size:11px;margin-bottom:6px;">Full YouTube transcript. '
+    + '<span style="background:rgba(192,57,43,.15);border-left:3px solid #c0392b;padding:0 4px;">Red = STT missed this speech</span>.</div>';
+  cov.forEach(c => {
+    if (c.matched) {
+      html += `<div style="margin:2px 0;"><span class="text-muted" style="font-family:monospace;font-size:11px;">${fmtT(c.start_s)}</span> ${esc(c.text)}</div>`;
+    } else {
+      html += `<div style="margin:2px 0;background:rgba(192,57,43,.15);border-left:3px solid #c0392b;padding:3px 6px;">`
+        + `<span style="color:#c0392b;font-family:monospace;font-size:11px;">${fmtT(c.start_s)} MISSED</span> ${esc(c.text)}</div>`;
+    }
+  });
+  html += "</div>";
+  box.innerHTML = html;
+  box.style.display = "";
+  btn.textContent = btn.textContent.replace("▸", "▾");
 }
 
 function switchImportMode(mode, btn) {

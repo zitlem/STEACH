@@ -1007,6 +1007,11 @@ def _youtube_align(data):
     for lb in dropped:
         drop_summary[lb.drop_reason] = drop_summary.get(lb.drop_reason, 0) + 1
 
+    # Full YouTube transcript with coverage flags — shows where STT missed speech.
+    cov_anchors = anchors if len(anchors) >= 3 else [(0.0, -offset)]
+    coverage = ca.caption_coverage(rows, caption_words, cov_anchors)
+    missed_count = sum(1 for c in coverage if not c["matched"])
+
     # Enrich the cached resolution with a summary so the review panel can list it.
     title = None
     if resolved:
@@ -1031,6 +1036,8 @@ def _youtube_align(data):
         "anchors": len(anchors),
         "db_excluded": db_excluded,
         "report": report,
+        "coverage": coverage,
+        "missed_count": missed_count,
         "_captions_vtt": vtt_text,   # private: consumed by the debug export
         "_db_path": db_path,
         "session": session,

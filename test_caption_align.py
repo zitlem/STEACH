@@ -166,6 +166,19 @@ def test_anchored_labeling_is_content_aware():
     assert labels[0].similarity == 1.0 and labels[1].similarity == 1.0
 
 
+def test_caption_coverage_flags_missed_segments():
+    rows = _rows(("hello world", 0.0, 3.0))  # STT only covers 0–3s
+    words = [
+        {"word": "hello", "t_s": 0.4}, {"word": "world", "t_s": 0.9},
+        # a gap, then speech YouTube caught but STT has no row for
+        {"word": "you", "t_s": 10.0}, {"word": "missed", "t_s": 10.4}, {"word": "this", "t_s": 10.8},
+    ]
+    cov = ca.caption_coverage(rows, words, [], gap_s=2.0)  # [] anchors -> identity time
+    assert len(cov) == 2
+    assert cov[0]["matched"] is True and cov[0]["text"] == "hello world"
+    assert cov[1]["matched"] is False and cov[1]["text"] == "you missed this"
+
+
 def test_build_anchors_drops_backwards_pairs():
     # Two shared distinctive words, but the second occurs earlier in captions than
     # the first — a monotonic map can keep only one of them.
