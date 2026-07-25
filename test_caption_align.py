@@ -189,6 +189,18 @@ def test_similarity_number_and_fuzzy():
     assert ca._similarity("hello world", "hello world") == 1.0
 
 
+def test_attribute_by_time_cross_language():
+    # English translation words attributed to Russian rows purely by time.
+    rows = _rows(("привет мир", 0.0, 2.0), ("как дела", 2.0, 4.0))
+    en = [
+        {"word": "hello", "t_s": 0.4}, {"word": "world", "t_s": 1.4},
+        {"word": "how", "t_s": 2.3}, {"word": "are", "t_s": 3.0}, {"word": "you", "t_s": 3.6},
+    ]
+    out = ca.attribute_by_time(rows, en, [])  # [] anchors -> identity time
+    assert out[1] == "hello world"
+    assert out[2] == "how are you"
+
+
 def test_caption_coverage_flags_missed_segments():
     rows = _rows(("hello world", 0.0, 3.0))  # STT only covers 0–3s
     words = [

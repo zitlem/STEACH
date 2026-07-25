@@ -41,6 +41,8 @@
     "speaking_only": false,
     "min_similarity": 0.0,
     "align_pad": 3.0,
-    "match_output": "match_output"
+    "match_output": "match_output",
+    "translation_enabled": true,
+    "translation_lang": "en"
   }
 }

@@ -889,6 +889,8 @@ def _youtube_cfg():
         "min_similarity": float(yt.get("min_similarity", 0.0)),
         "align_pad": float(yt.get("align_pad", 3.0)),
         "match_output": yt.get("match_output", "match_output"),
+        "translation_enabled": bool(yt.get("translation_enabled", True)),
+        "translation_lang": yt.get("translation_lang", "en"),
     }
 
 
@@ -1031,6 +1033,18 @@ def _youtube_align(data):
     coverage = ca.caption_coverage(rows, caption_words, cov_anchors)
     missed_count = sum(1 for c in coverage if not c["matched"])
 
+    # Optional: YouTube's translated captions (e.g. English) attributed to rows by time,
+    # to pre-fill the Translation tab's target. Cached per video+lang; skipped on miss.
+    translation_by_id = {}
+    if data.get("translate", ycfg["translation_enabled"]) and ycfg["translation_lang"]:
+        tr_vtt, _tr_lang, tr_err = _yt_download_captions(
+            video_target, ycfg["translation_lang"], allow_fetch=True, force=refresh
+        )
+        if tr_vtt and not tr_err:
+            tr_words = ca.to_word_stream(ca.parse_vtt(tr_vtt))
+            if tr_words:
+                translation_by_id = ca.attribute_by_time(rows, tr_words, cov_anchors)
+
     # Enrich the cached resolution with a summary so the review panel can list it.
     title = None
     if resolved:
@@ -1060,11 +1074,17 @@ def _youtube_align(data):
         "_captions_vtt": vtt_text,   # private: consumed by the debug export
         "_db_path": db_path,
         "session": session,
-        "kept": [lb.to_dict() for lb in kept],
-        "dropped": [lb.to_dict() for lb in dropped],
+        "kept": [_row_with_translation(lb, translation_by_id) for lb in kept],
+        "dropped": [_row_with_translation(lb, translation_by_id) for lb in dropped],
         "drop_summary": drop_summary,
     }
     return payload, None
+
+
+def _row_with_translation(lb, translation_by_id):
+    d = lb.to_dict()
+    d["translation_text"] = translation_by_id.get(d.get("transcription_id"), "")
+    return d
 
 
 def _youtube_error_response(err):

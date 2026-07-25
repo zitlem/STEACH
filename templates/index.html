@@ -245,6 +245,7 @@
         <button class="btn btn-ghost btn-sm" id="yt-debug-btn" onclick="ytDownloadDebug()" title="Download the DB, raw captions and alignment result as a zip for review">⤓ Download debug bundle (DB + captions + alignment)</button>
         <label style="font-size:12px;color:var(--text-muted,#888);"><input type="checkbox" id="yt-refresh"> re-fetch from YouTube (ignore cache)</label>
         <label style="font-size:12px;color:var(--text-muted,#888);" title="Exclude non-speech (Music/Quiet) rows from the match"><input type="checkbox" id="yt-speaking-only" onchange="ytOptionChanged()"> speech only</label>
+        <label style="font-size:12px;color:var(--text-muted,#888);" title="Also pull YouTube's English translation to pre-fill the Translation tab"><input type="checkbox" id="yt-translate" checked onchange="ytOptionChanged()"> YouTube translation</label>
         <span style="flex:1;"></span>
         <input type="file" id="yt-bundle-file" accept=".zip" style="font-size:12px;max-width:230px;">
         <button class="btn btn-ghost btn-sm" onclick="ytUploadBundle()" title="Store a previously-downloaded bundle's captions on the server so future runs skip YouTube">⤒ Upload bundle to server</button>
@@ -317,8 +318,8 @@
           </div>
           <table>
             <thead><tr>
-              <th>Transcribed Text (source)</th>
-              <th>Correct Translation (target — edit if needed)</th>
+              <th>Transcribed Text (source, STT)</th>
+              <th>NLLB (reference) → editable YouTube English (the translation label)</th>
               <th style="width:170px;">Actions</th>
             </tr></thead>
             <tbody id="tl-tbody"></tbody>
@@ -726,7 +727,7 @@ async function runAutoLabelPreview(opts = {}) {
     const res = await fetch("/api/youtube/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ db_path: dbPath, channel, wav_path: wavInput.value.trim(), refresh: document.getElementById("yt-refresh").checked, speaking_only: document.getElementById("yt-speaking-only").checked }),
+      body: JSON.stringify({ db_path: dbPath, channel, wav_path: wavInput.value.trim(), refresh: document.getElementById("yt-refresh").checked, speaking_only: document.getElementById("yt-speaking-only").checked, translate: document.getElementById("yt-translate").checked }),
     });
     const data = await res.json();
     if (data.error) {
@@ -744,16 +745,17 @@ async function runAutoLabelPreview(opts = {}) {
     window._ytDropped = new Set();
     (data.kept || []).forEach(l => {
       const r = byId.get(l.transcription_id);
-      if (r) { r.yt_text = l.corrected_text; r.yt_sim = l.similarity; r.yt_drop = null; }
+      if (r) { r.yt_text = l.corrected_text; r.yt_sim = l.similarity; r.yt_drop = null; r.yt_translation = l.translation_text; }
     });
     (data.dropped || []).forEach(l => {
       const r = byId.get(l.transcription_id);
-      if (r) { r.yt_text = l.corrected_text; r.yt_sim = l.similarity; r.yt_drop = l.drop_reason; window._ytDropped.add(r.id); }
+      if (r) { r.yt_text = l.corrected_text; r.yt_sim = l.similarity; r.yt_drop = l.drop_reason; r.yt_translation = l.translation_text; window._ytDropped.add(r.id); }
     });
     if (data.wav_path && !wavInput.value.trim()) wavInput.value = data.wav_path;
     document.getElementById("import-loaded-wrap").style.display = "";
     switchImportMode("stt", document.querySelector(".sub-tab-btn"));
     renderImportTable();
+    renderTlRows();
 
     const rep = data.report || {};
     const drops = Object.entries(data.drop_summary || {}).map(([k, v]) => `${v} ${k}`).join(", ") || "none";
@@ -927,7 +929,7 @@ async function ytDownloadDebug() {
   try {
     const res = await fetch("/api/youtube/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ db_path: dbPath, channel, refresh: document.getElementById("yt-refresh").checked, speaking_only: document.getElementById("yt-speaking-only").checked }),
+      body: JSON.stringify({ db_path: dbPath, channel, refresh: document.getElementById("yt-refresh").checked, speaking_only: document.getElementById("yt-speaking-only").checked, translate: document.getElementById("yt-translate").checked }),
     });
     const ct = res.headers.get("content-type") || "";
     if (!res.ok || ct.includes("application/json")) {
@@ -1024,10 +1026,17 @@ function renderTlRows() {
     const tr = document.createElement("tr");
     tr.dataset.start = row.start_time; tr.dataset.end = row.end_time;
     if (bk.has(key)) tr.dataset.bookmark = "1";
+    // Target cell: NLLB (STT app's machine translation) as a muted reference above the
+    // editable field, which is pre-filled with YouTube's English (falls back to NLLB).
+    const hasYtTr = row.yt_translation != null && row.yt_translation !== "";
+    const nllbRef = row.translated_text
+      ? `<div class="text-muted" style="font-size:12px;margin-bottom:4px;">NLLB: ${escArea(row.translated_text)}</div>`
+      : "";
+    const tgtVal = hasYtTr ? row.yt_translation : (row.translated_text || "");
     tr.innerHTML = `
-      <td class="text-mono" style="max-width:350px;word-break:break-word;">${row.text || ""}</td>
-      <td><textarea class="tl-input" data-i="${i}" oninput="autoGrow(this)" placeholder="Type correct translation...">${escArea(row.translated_text || "")}</textarea></td>
-      <td style="white-space:nowrap;">${star} ${av}
+      <td class="text-mono" style="max-width:350px;word-break:break-word;vertical-align:top;">${row.text || ""}</td>
+      <td>${nllbRef}<textarea class="tl-input" data-i="${i}" oninput="autoGrow(this)" placeholder="Type correct translation..." title="${hasYtTr ? "YouTube translation — edit to correct" : "translation target"}">${escArea(tgtVal)}</textarea></td>
+      <td style="white-space:nowrap;vertical-align:top;">${star} ${av}
         <button class="btn btn-primary2 btn-sm" onclick="addTlPair(${i})">Add</button></td>`;
     tbody.appendChild(tr);
   });

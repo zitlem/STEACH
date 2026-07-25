@@ -635,6 +635,35 @@ def label_rows_anchored(
     return labels
 
 
+def attribute_by_time(
+    db_rows: Sequence[Dict[str, object]],
+    caption_words: Sequence[Dict[str, object]],
+    anchors: Sequence[Tuple[float, float]],
+    pad_s: float = 3.0,
+) -> Dict[object, str]:
+    """Assign caption words to DB rows purely by (anchor-mapped) time — no content
+    refinement. Used for a DIFFERENT-language track (e.g. YouTube's English
+    translation), where the caption text won't match the row's source text so
+    content matching can't help. Returns {transcription_id: joined_text}."""
+    rows = list(db_rows)
+    bounds = [_row_bounds(r) for r in rows]
+    buckets: List[List[str]] = [[] for _ in rows]
+    projected = sorted(
+        ((map_caption_time(anchors, float(cw["t_s"])), str(cw["word"])) for cw in caption_words),  # type: ignore[arg-type]
+        key=lambda x: x[0],
+    )
+    for t, w in projected:
+        idx = _assign_row(t, bounds, pad_s)
+        if idx is not None:
+            buckets[idx].append(w)
+    out: Dict[object, str] = {}
+    for row, words in zip(rows, buckets):
+        rid = row.get("id")
+        if rid is not None:
+            out[rid] = " ".join(words)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Filtering (the "fully automatic" safety net)
 # ---------------------------------------------------------------------------
