@@ -1,7 +1,4 @@
-training_data/stt/audio/
-training_data/translation/
-training_data/caption_cache/
-training_data/training_history.jsonl
+training_data/
 __pycache__/
 *.pyc
 *.pyo
