@@ -482,20 +482,41 @@ def api_import_extract():
 
 # --- YouTube auto-labeling (channel + session date -> captions -> training data) ---
 
-def _read_transcription_rows(db_path):
+def _read_transcription_rows(db_path, include_denied=False, speaking_only=False):
     """Read the labelable transcription rows from a session DB (read-only).
 
-    Same filter/order as api_import_list so alignment sees exactly the rows the
-    import table would. Returns list[dict] with id/timestamp/text/start_time/end_time.
+    Honors the STT app's own per-row flags so we don't train on rows it already
+    rejected: skips `denied` rows (hallucination/dup/short/cjk...) and partial
+    hypotheses (`is_final = 0`), and — when speaking_only — non-speech rows
+    (speech_type Music/Quiet). Columns are detected so older schemas still work.
+    Returns list[dict], including denied_reason/speech_type when present.
+
+    Returns (rows, excluded) where `excluded` counts rows dropped by these flags.
     """
-    where = "WHERE text IS NOT NULL AND trim(text) != '' AND start_time IS NOT NULL"
     with sqlite3.connect(f"file:{db_path}?immutable=1", uri=True) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            f"SELECT id, timestamp, text, start_time, end_time FROM transcriptions "
-            f"{where} ORDER BY start_time ASC"
-        ).fetchall()
-    return [dict(r) for r in rows]
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(transcriptions)")}
+        select = ["id", "timestamp", "text", "start_time", "end_time"]
+        for opt in ("denied", "denied_reason", "speech_type", "music_prob", "is_final"):
+            if opt in cols:
+                select.append(opt)
+
+        base = ["text IS NOT NULL", "trim(text) != ''", "start_time IS NOT NULL"]
+        flags = []
+        if "is_final" in cols:
+            flags.append("(is_final = 1 OR is_final IS NULL)")
+        if "denied" in cols and not include_denied:
+            flags.append("(denied = 0 OR denied IS NULL)")
+        if "speech_type" in cols and speaking_only:
+            flags.append("(speech_type = 'Speaking' OR speech_type IS NULL)")
+
+        order = " ORDER BY start_time ASC"
+        rows = [dict(r) for r in conn.execute(
+            f"SELECT {', '.join(select)} FROM transcriptions "
+            f"WHERE {' AND '.join(base + flags)}{order}")]
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM transcriptions WHERE {' AND '.join(base)}").fetchone()[0]
+    return rows, total - len(rows)
 
 
 def _channel_tab_urls(channel, tabs):
@@ -827,6 +848,9 @@ def _youtube_cfg():
         "scan_limit": int(yt.get("scan_limit", 300)),
         "tabs": list(tabs),
         "coarse_days": int(yt.get("coarse_days", 30)),
+        "include_denied": bool(yt.get("include_denied", False)),
+        "speaking_only": bool(yt.get("speaking_only", False)),
+        "min_similarity": float(yt.get("min_similarity", 0.0)),
     }
 
 
@@ -843,7 +867,7 @@ def api_youtube_resolve():
         return jsonify({"error": "no YouTube channel provided or configured"}), 400
 
     try:
-        rows = _read_transcription_rows(db_path)
+        rows, _ = _read_transcription_rows(db_path)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
     session = ca.session_datetime(rows)
@@ -876,7 +900,9 @@ def _youtube_align(data):
         return None, (f"DB not found: {db_path}", 404)
 
     try:
-        rows = _read_transcription_rows(db_path)
+        rows, db_excluded = _read_transcription_rows(
+            db_path, include_denied=ycfg["include_denied"], speaking_only=ycfg["speaking_only"]
+        )
     except Exception as e:
         return None, (str(e), 500)
     if not rows:
@@ -942,6 +968,19 @@ def _youtube_align(data):
             offset = ca.estimate_offset(rows, caption_words)
             labels = ca.label_rows(rows, caption_words, offset)
     kept, dropped = ca.filter_labels(labels)
+
+    # Optional quality gate: drop poorly-aligned rows (configurable, default off).
+    min_sim = ycfg["min_similarity"]
+    if min_sim > 0:
+        gated = []
+        for lb in kept:
+            if lb.similarity < min_sim:
+                lb.drop_reason = "low_similarity"
+                dropped.append(lb)
+            else:
+                gated.append(lb)
+        kept = gated
+
     report = ca.match_report(kept)
 
     drop_summary = {}
@@ -960,6 +999,7 @@ def _youtube_align(data):
         "wav_path": wav_path,
         "offset": round(offset, 2),
         "anchors": len(anchors),
+        "db_excluded": db_excluded,
         "report": report,
         "_captions_vtt": vtt_text,   # private: consumed by the debug export
         "_db_path": db_path,

@@ -36,6 +36,9 @@
     "day_window": 1,
     "scan_limit": 300,
     "tabs": ["streams", "videos"],
-    "coarse_days": 30
+    "coarse_days": 30,
+    "include_denied": false,
+    "speaking_only": false,
+    "min_similarity": 0.0
   }
 }
