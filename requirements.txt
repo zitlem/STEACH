@@ -7,6 +7,7 @@ evaluate>=0.4.0
 jiwer>=3.0.0
 pydub
 soundfile
+yt-dlp
 faster-whisper
 torch
 datasets

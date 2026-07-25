@@ -201,6 +201,19 @@
         </div>
         <button class="btn btn-ghost" onclick="fpOpen('import-wav-path',window._backupDir||'/home')">Browse</button>
       </div>
+      <!-- YouTube auto-labeling: pull the matching video's captions (by date) and fill corrections -->
+      <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:14px;">
+        <div>
+          <label>YouTube Channel
+            <span class="text-muted" style="font-size:11px;font-weight:400;">— auto-labels training data from the matching video's captions, matched by session date</span>
+          </label>
+          <input type="text" id="yt-channel" placeholder="@channel, channel URL, or UC… id">
+        </div>
+        <button class="btn btn-primary" id="yt-autolabel-btn">Auto-label from YouTube</button>
+      </div>
+      <div id="yt-alert"></div>
+      <div id="yt-report" style="display:none;margin-bottom:14px;"></div>
+      <button class="btn btn-primary" id="yt-build-btn" style="display:none;margin-bottom:14px;" onclick="ytBuildDataset()">Build training set from reviewed rows</button>
       <div id="import-alert"></div>
       <div id="import-toggle-row" style="display:none;margin-top:12px;">
         <button class="btn btn-ghost btn-sm" id="import-toggle-btn" onclick="
@@ -589,6 +602,132 @@ document.getElementById("import-load-btn").addEventListener("click", async () =>
   renderTlRows();
 });
 
+// YouTube auto-labeling: PREVIEW step. Resolve the matching video by date, pull
+// its captions, align onto the loaded DB rows, and fill the import table with the
+// corrected text for a quick visual review. Nothing is saved until the operator
+// clicks "Build training set from reviewed rows".
+window._ytDropped = new Set();
+
+document.getElementById("yt-autolabel-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("yt-autolabel-btn");
+  const dbPath = document.getElementById("import-db-path").value.trim()
+    || document.getElementById("import-db-path").placeholder.trim();
+  const channel = document.getElementById("yt-channel").value.trim();
+  const wavInput = document.getElementById("import-wav-path");
+  const reportDiv = document.getElementById("yt-report");
+  const buildBtn = document.getElementById("yt-build-btn");
+  reportDiv.style.display = "none";
+  buildBtn.style.display = "none";
+
+  if (!channel) { alertDiv("yt-alert", "Enter a YouTube channel first.", "err"); return; }
+  if (!importRows.length) { alertDiv("yt-alert", "Click Load first to load the DB rows, then Auto-label.", "err"); return; }
+
+  btn.disabled = true;
+  const oldLabel = btn.textContent;
+  btn.textContent = "Working… (resolving + captions)";
+  alertDiv("yt-alert", "Resolving video by date and downloading captions… this can take a minute.", "");
+
+  try {
+    const res = await fetch("/api/youtube/preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ db_path: dbPath, channel, wav_path: wavInput.value.trim() }),
+    });
+    const data = await res.json();
+    if (data.error) {
+      let msg = data.error;
+      if (data.pick && data.pick.ranked && data.pick.ranked.length) {
+        msg += " — candidates: " + data.pick.ranked.map(c => `${c.title || c.id} (${c.upload_date})`).join(", ");
+      }
+      alertDiv("yt-alert", msg, "err");
+      return;
+    }
+
+    // Merge corrected text into the loaded rows for review (matched by DB row id).
+    const byId = new Map(importRows.map(r => [r.id, r]));
+    window._ytDropped = new Set();
+    (data.kept || []).forEach(l => {
+      const r = byId.get(l.transcription_id);
+      if (r) { r.text = l.corrected_text; r.yt_sim = l.similarity; r.yt_drop = null; }
+    });
+    (data.dropped || []).forEach(l => {
+      const r = byId.get(l.transcription_id);
+      if (r) { r.yt_sim = l.similarity; r.yt_drop = l.drop_reason; window._ytDropped.add(r.id); }
+    });
+    if (data.wav_path && !wavInput.value.trim()) wavInput.value = data.wav_path;
+    document.getElementById("import-loaded-wrap").style.display = "";
+    switchImportMode("stt", document.querySelector(".sub-tab-btn"));
+    renderImportTable();
+
+    const rep = data.report || {};
+    const drops = Object.entries(data.drop_summary || {}).map(([k, v]) => `${v} ${k}`).join(", ") || "none";
+    const sim = typeof rep.mean_similarity === "number" ? (rep.mean_similarity * 100).toFixed(1) + "%" : "—";
+    reportDiv.innerHTML =
+      `<div class="table-wrap" style="padding:12px;">
+         <strong>YouTube auto-label — review before building</strong><br>
+         Video: <code>${data.video || ""}</code> &nbsp;|&nbsp; time offset: ${data.offset}s<br>
+         Rows to keep: <strong>${(data.kept || []).length}</strong> &nbsp;|&nbsp; skipped as junk: ${drops}<br>
+         Mean caption↔original agreement: <strong>${sim}</strong> (low-match rows: ${rep.low_match_count ?? 0})<br>
+         <div class="text-muted" style="font-size:11px;margin-top:6px;">
+           Scan the corrected text in the table below (skipped rows are greyed out and excluded).
+           Edit anything that looks wrong, then click <strong>Build training set</strong>. Low agreement
+           usually means the wrong video, language, or a bad time offset — fix before building.
+         </div>
+       </div>`;
+    reportDiv.style.display = "";
+    if ((data.kept || []).length) {
+      buildBtn.textContent = `Build training set from reviewed rows (${(data.kept || []).length})`;
+      buildBtn.style.display = "";
+    }
+    alertDiv("yt-alert", "Captions aligned — review the rows below, then build.", "ok");
+  } catch (e) {
+    alertDiv("yt-alert", "Request failed: " + e, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = oldLabel;
+  }
+});
+
+// BUILD step: extract clips for the reviewed (non-skipped) rows using the current,
+// possibly-edited, text in the table. This is the explicit gate before training.
+async function ytBuildDataset() {
+  const wavPath = document.getElementById("import-wav-path").value.trim();
+  const segments = [];
+  importRows.forEach((row, i) => {
+    if (window._ytDropped && window._ytDropped.has(row.id)) return;
+    const input = document.querySelector(`.import-text-input[data-i="${i}"]`);
+    const text = input ? input.value.trim() : (row.text || "").trim();
+    if (!text) return;
+    if (!((row.end_time || 0) > (row.start_time || 0))) return;
+    segments.push({ corrected_text: text, start_time: row.start_time, end_time: row.end_time });
+  });
+  if (!segments.length) { alertDiv("yt-alert", "No reviewed rows to add.", "err"); return; }
+  if (!wavPath) { alertDiv("yt-alert", "Select the session WAV first.", "err"); return; }
+  if (!confirm(`Add ${segments.length} reviewed clips to the training set?`)) return;
+
+  const buildBtn = document.getElementById("yt-build-btn");
+  buildBtn.disabled = true;
+  const old = buildBtn.textContent;
+  buildBtn.textContent = "Building…";
+  try {
+    const res = await fetch("/api/import/extract", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wav_path: wavPath, segments }),
+    });
+    const d = await res.json();
+    if (d.error) { alertDiv("yt-alert", d.error, "err"); return; }
+    const ok = (d.results || []).filter(r => r.ok).length;
+    alertDiv("yt-alert", `Added ${ok} clips to the training set. Review the Dataset tab, then Start Training.`, "ok");
+    buildBtn.style.display = "none";
+    loadDataset();
+  } catch (e) {
+    alertDiv("yt-alert", "Build failed: " + e, "err");
+  } finally {
+    buildBtn.disabled = false;
+    buildBtn.textContent = old;
+  }
+}
+
 function switchImportMode(mode, btn) {
   document.querySelectorAll(".sub-tab-btn").forEach(b => b.classList.remove("active"));
   document.querySelectorAll(".sub-tab-pane").forEach(p => p.classList.remove("active"));
@@ -686,9 +825,19 @@ function renderImportTable() {
     const previewCell = hasAudio
       ? `<button class="btn btn-ghost btn-sm" onclick="previewSegment(${i})" title="Play audio">▶</button>`
       : `<span class="text-muted">—</span>`;
+    // YouTube auto-label review badges (only present after an Auto-label preview).
+    let ytBadge = "";
+    if (row.yt_drop) {
+      ytBadge = `<div style="color:#c0392b;font-size:10px;" title="excluded from training">skip: ${row.yt_drop}</div>`;
+    } else if (row.yt_sim != null) {
+      const pct = Math.round(row.yt_sim * 100);
+      const col = pct < 50 ? "#c0392b" : (pct < 80 ? "#b7791f" : "#2f855a");
+      ytBadge = `<div style="color:${col};font-size:10px;" title="caption vs original agreement">${pct}% match</div>`;
+    }
     const tr = document.createElement("tr");
+    if (row.yt_drop) tr.style.opacity = "0.45";
     tr.innerHTML = `
-      <td class="text-mono" style="font-size:11px;">${(row.start_time||0).toFixed(1)}s</td>
+      <td class="text-mono" style="font-size:11px;">${(row.start_time||0).toFixed(1)}s${ytBadge}</td>
       <td><input type="text" class="import-text-input" value="${(row.text || "").replace(/"/g, "&quot;")}" data-i="${i}"></td>
       <td class="text-muted">${fmtDuration((row.end_time||0)-(row.start_time||0))}</td>
       <td>${previewCell}</td>
@@ -1079,6 +1228,11 @@ async function loadAppConfig() {
 
     // Store backup dir for Browse button defaults
     window._backupDir = cfg.main_app_audio_backup || "/home";
+
+    // Pre-fill YouTube channel from config (set once)
+    if (cfg.youtube && cfg.youtube.channel) {
+      document.getElementById("yt-channel").value = cfg.youtube.channel;
+    }
 
     // Populate NLLB model dropdown dynamically
     const sel = document.getElementById("train-tl-base-model");

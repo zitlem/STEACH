@@ -7,12 +7,15 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import soundfile as sf
 import numpy as np
 from flask import Flask, jsonify, render_template, request
 from flask_socketio import SocketIO
+
+import caption_align as ca
 
 # ---------------------------------------------------------------------------
 # Config
@@ -360,38 +363,25 @@ def api_import_save():
     return jsonify({"results": results})
 
 
-@app.route("/api/import/extract", methods=["POST"])
-def api_import_extract():
-    """Extract audio clips from a session WAV using DB timestamps.
-
-    Accepts JSON:
-    {
-      "wav_path": "/path/to/session.wav",
-      "segments": [{"corrected_text": str, "start_time": float, "end_time": float}]
-    }
-    Slices the WAV, resamples each clip to 16kHz mono, saves to training_data/stt/audio/.
+def _extract_clips(wav_path, segments, source="session_extract"):
+    """Slice a session WAV into 16kHz mono clips per segment and append them to
+    the STT manifest. Returns (results, error) where error is (message, status)
+    or None. Each segment is {corrected_text, start_time, end_time}.
     """
-    data = request.get_json()
-    if not data:
-        return jsonify({"error": "empty body"}), 400
-
-    wav_path = data.get("wav_path", "").strip()
-    segments = data.get("segments", [])
-
     if not wav_path or not os.path.exists(wav_path):
-        return jsonify({"error": f"WAV not found: {wav_path}"}), 404
+        return None, (f"WAV not found: {wav_path}", 404)
     if not segments:
-        return jsonify({"error": "no segments provided"}), 400
+        return None, ("no segments provided", 400)
 
     from pydub import AudioSegment as PydubAudio
     try:
         session_audio = PydubAudio.from_file(wav_path)
     except Exception as e:
-        return jsonify({"error": f"Failed to load WAV: {e}"}), 500
+        return None, (f"Failed to load WAV: {e}", 500)
 
     results = []
     for seg in segments:
-        text = seg.get("corrected_text", "").strip()
+        text = (seg.get("corrected_text") or "").strip()
         start_time = seg.get("start_time", 0.0)
         end_time = seg.get("end_time", 0.0)
 
@@ -416,12 +406,314 @@ def api_import_extract():
             "audio": clip_name,
             "text": text,
             "duration": duration,
-            "source": "session_extract",
+            "source": source,
             "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         })
         results.append({"ok": True, "clip": clip_name, "duration": duration})
 
+    return results, None
+
+
+@app.route("/api/import/extract", methods=["POST"])
+def api_import_extract():
+    """Extract audio clips from a session WAV using DB timestamps.
+
+    Accepts JSON:
+    {
+      "wav_path": "/path/to/session.wav",
+      "segments": [{"corrected_text": str, "start_time": float, "end_time": float}]
+    }
+    Slices the WAV, resamples each clip to 16kHz mono, saves to training_data/stt/audio/.
+    """
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "empty body"}), 400
+
+    wav_path = data.get("wav_path", "").strip()
+    segments = data.get("segments", [])
+    results, err = _extract_clips(wav_path, segments)
+    if err:
+        return jsonify({"error": err[0]}), err[1]
     return jsonify({"results": results})
+
+
+# --- YouTube auto-labeling (channel + session date -> captions -> training data) ---
+
+def _read_transcription_rows(db_path):
+    """Read the labelable transcription rows from a session DB (read-only).
+
+    Same filter/order as api_import_list so alignment sees exactly the rows the
+    import table would. Returns list[dict] with id/timestamp/text/start_time/end_time.
+    """
+    where = "WHERE text IS NOT NULL AND trim(text) != '' AND start_time IS NOT NULL"
+    with sqlite3.connect(f"file:{db_path}?immutable=1", uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            f"SELECT id, timestamp, text, start_time, end_time FROM transcriptions "
+            f"{where} ORDER BY start_time ASC"
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def _channel_videos_url(channel):
+    """Normalize a channel handle/id/URL into a channel videos-tab URL."""
+    c = (channel or "").strip()
+    if not c:
+        return ""
+    if c.startswith("http"):
+        return c
+    if c.startswith("@"):
+        return f"https://www.youtube.com/{c}/videos"
+    if c.startswith("UC"):
+        return f"https://www.youtube.com/channel/{c}/videos"
+    return f"https://www.youtube.com/@{c}/videos"
+
+
+def _yt_channel_videos(channel, date_str, day_window, scan_limit):
+    """List a channel's videos near `date_str` (YYYY-MM-DD) via yt-dlp.
+
+    Returns (candidates, error). candidates are dicts
+    {id, upload_date, title, duration}. Narrowed by --dateafter/--datebefore and
+    bounded by --playlist-end so it stays fast on large channels.
+    """
+    url = _channel_videos_url(channel)
+    if not url:
+        return None, "no channel configured"
+    center = datetime.strptime(date_str, "%Y-%m-%d")
+    after = (center - timedelta(days=day_window)).strftime("%Y%m%d")
+    before = (center + timedelta(days=day_window)).strftime("%Y%m%d")
+    cmd = [
+        "yt-dlp", "--ignore-errors", "--no-warnings", "--skip-download",
+        "--playlist-end", str(scan_limit),
+        "--dateafter", after, "--datebefore", before,
+        "--print", "%(id)s\t%(upload_date)s\t%(title)s\t%(duration)s",
+        url,
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except FileNotFoundError:
+        return None, "yt-dlp is not installed (pip install yt-dlp)"
+    except subprocess.TimeoutExpired:
+        return None, "yt-dlp channel listing timed out"
+
+    candidates = []
+    for line in proc.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2 or not parts[0]:
+            continue
+        vid, up = parts[0], parts[1]
+        title = parts[2] if len(parts) > 2 else ""
+        dur = 0.0
+        if len(parts) > 3:
+            try:
+                dur = float(parts[3])
+            except ValueError:
+                dur = 0.0
+        candidates.append({"id": vid, "upload_date": up, "title": title, "duration": dur})
+    return candidates, None
+
+
+def _yt_download_captions(target, sub_lang):
+    """Download auto-captions (WebVTT) for a video id/URL. Returns (vtt_text, error)."""
+    yturl = target if str(target).startswith("http") else f"https://youtu.be/{target}"
+    tmp_dir = Path(TRAINING_DATA_DIR) / "_yt_captions"
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    out_tmpl = str(tmp_dir / f"cap_{uuid.uuid4().hex}.%(ext)s")
+    cmd = [
+        "yt-dlp", "--no-warnings", "--skip-download",
+        "--write-auto-sub", "--sub-lang", sub_lang,
+        "--convert-subs", "vtt",
+        "-o", out_tmpl, yturl,
+    ]
+    try:
+        subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    except FileNotFoundError:
+        return None, "yt-dlp is not installed (pip install yt-dlp)"
+    except subprocess.TimeoutExpired:
+        return None, "yt-dlp caption download timed out"
+
+    stem = Path(out_tmpl.replace(".%(ext)s", "")).name
+    vtts = sorted(tmp_dir.glob(f"{stem}*.vtt"))
+    if not vtts:
+        return None, f"no auto-captions found for language '{sub_lang}'"
+    try:
+        text = vtts[0].read_text(encoding="utf-8", errors="replace")
+    finally:
+        for f in tmp_dir.glob(f"{stem}*"):
+            try:
+                f.unlink()
+            except OSError:
+                pass
+    return text, None
+
+
+def _youtube_cfg():
+    yt = CONFIG.get("youtube", {}) if isinstance(CONFIG, dict) else {}
+    return {
+        "channel": yt.get("channel", ""),
+        "sub_lang": yt.get("sub_lang", "en"),
+        "day_window": int(yt.get("day_window", 1)),
+        "scan_limit": int(yt.get("scan_limit", 200)),
+    }
+
+
+@app.route("/api/youtube/resolve", methods=["POST"])
+def api_youtube_resolve():
+    """Resolve which channel video matches a session DB (by date). No download."""
+    data = request.get_json() or {}
+    ycfg = _youtube_cfg()
+    db_path = (data.get("db_path") or MAIN_APP_DB).strip()
+    channel = (data.get("channel") or ycfg["channel"]).strip()
+    if not os.path.exists(db_path):
+        return jsonify({"error": f"DB not found: {db_path}"}), 404
+    if not channel:
+        return jsonify({"error": "no YouTube channel provided or configured"}), 400
+
+    try:
+        rows = _read_transcription_rows(db_path)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    session = ca.session_datetime(rows)
+    if not session.get("date"):
+        return jsonify({"error": "could not determine session date from DB"}), 400
+
+    candidates, err = _yt_channel_videos(
+        channel, session["date"], ycfg["day_window"], ycfg["scan_limit"]
+    )
+    if err:
+        return jsonify({"error": err}), 502
+    pick = ca.pick_video(candidates, session, day_window=ycfg["day_window"])
+    return jsonify({"session": session, "pick": pick, "candidate_count": len(candidates)})
+
+
+def _youtube_align(data):
+    """Resolve video by date -> download captions -> align to DB rows -> filter.
+
+    Does NOT extract audio or touch the manifest — it produces the labels for
+    review. Returns (payload, error). error is (body, status) where body is a
+    dict or message string. payload carries per-row `kept`/`dropped` labels plus
+    the resolved video, offset, match report and detected wav_path.
+    """
+    ycfg = _youtube_cfg()
+    db_path = (data.get("db_path") or MAIN_APP_DB).strip()
+    channel = (data.get("channel") or ycfg["channel"]).strip()
+    sub_lang = (data.get("sub_lang") or ycfg["sub_lang"]).strip()
+    if not os.path.exists(db_path):
+        return None, (f"DB not found: {db_path}", 404)
+
+    try:
+        rows = _read_transcription_rows(db_path)
+    except Exception as e:
+        return None, (str(e), 500)
+    if not rows:
+        return None, ("no labelable rows in DB", 400)
+    session = ca.session_datetime(rows)
+
+    # 1) pick the video (explicit override wins)
+    resolved = None
+    video_target = (data.get("video_url") or "").strip()
+    if not video_target:
+        if not channel:
+            return None, ("no YouTube channel or video_url provided", 400)
+        if not session.get("date"):
+            return None, ("could not determine session date from DB", 400)
+        candidates, err = _yt_channel_videos(
+            channel, session["date"], ycfg["day_window"], ycfg["scan_limit"]
+        )
+        if err:
+            return None, (err, 502)
+        pick = ca.pick_video(candidates, session, day_window=ycfg["day_window"])
+        if not pick.get("video_id"):
+            return None, ({"error": "no channel video matched the session date",
+                           "pick": pick, "session": session}, 404)
+        video_target = pick["video_id"]
+        resolved = pick
+
+    # 2) download auto-captions
+    vtt_text, err = _yt_download_captions(video_target, sub_lang)
+    if err:
+        return None, (err, 502)
+
+    # 3) align + label + filter
+    cues = ca.parse_vtt(vtt_text)
+    caption_words = ca.to_word_stream(cues)
+    if not caption_words:
+        return None, ("captions parsed but contained no words", 422)
+    offset_val = data.get("offset")
+    offset = float(offset_val) if offset_val is not None else ca.estimate_offset(rows, caption_words)
+    labels = ca.label_rows(rows, caption_words, offset)
+    kept, dropped = ca.filter_labels(labels)
+    report = ca.match_report(kept)
+
+    drop_summary = {}
+    for lb in dropped:
+        drop_summary[lb.drop_reason] = drop_summary.get(lb.drop_reason, 0) + 1
+
+    wav_path = (data.get("wav_path") or "").strip()
+    if not wav_path:
+        wavs = _find_companion_wav(db_path)
+        wav_path = wavs[0] if wavs else ""
+
+    payload = {
+        "resolved_video": resolved,
+        "video": video_target,
+        "wav_path": wav_path,
+        "offset": round(offset, 2),
+        "report": report,
+        "session": session,
+        "kept": [lb.to_dict() for lb in kept],
+        "dropped": [lb.to_dict() for lb in dropped],
+        "drop_summary": drop_summary,
+    }
+    return payload, None
+
+
+def _youtube_error_response(err):
+    body, status = err
+    return jsonify(body if isinstance(body, dict) else {"error": body}), status
+
+
+@app.route("/api/youtube/preview", methods=["POST"])
+def api_youtube_preview():
+    """Resolve + caption + align + filter, and return per-row labels for REVIEW.
+
+    Nothing is written to the training set — the operator eyeballs the rows in the
+    import table and then builds the dataset explicitly. Body:
+    {db_path?, channel?, sub_lang?, wav_path?, video_url?, offset?}
+    """
+    payload, err = _youtube_align(request.get_json() or {})
+    if err:
+        return _youtube_error_response(err)
+    if not payload["kept"]:
+        payload = {**payload,
+                   "error": "no rows survived filtering — check channel/date/language"}
+        return jsonify(payload), 422
+    return jsonify(payload)
+
+
+@app.route("/api/youtube/build_dataset", methods=["POST"])
+def api_youtube_build_dataset():
+    """Fully-automatic one-shot (no review): align then extract clips into the
+    manifest. The UI defaults to the preview+review flow instead; this remains for
+    scripted use. Body same as /api/youtube/preview."""
+    payload, err = _youtube_align(request.get_json() or {})
+    if err:
+        return _youtube_error_response(err)
+    if not payload["kept"]:
+        return jsonify({**payload, "error": "no rows survived filtering"}), 422
+
+    segments = [
+        {"corrected_text": lb["corrected_text"],
+         "start_time": lb["start_time"], "end_time": lb["end_time"]}
+        for lb in payload["kept"]
+    ]
+    results, xerr = _extract_clips(payload["wav_path"], segments, source="youtube_autolabel")
+    if xerr:
+        return jsonify({**payload, "error": f"clip extraction failed: {xerr[0]}"}), xerr[1]
+
+    payload["ok"] = True
+    payload["clips_saved"] = sum(1 for r in results if r.get("ok"))
+    return jsonify(payload)
 
 
 # --- Training ---
@@ -521,6 +813,7 @@ def api_config():
         "main_app_db": MAIN_APP_DB,
         "main_app_audio_backup": MAIN_APP_AUDIO_BACKUP,
         "nllb_models": _discover_nllb_models(),
+        "youtube": _youtube_cfg(),
         "warnings": warnings,
     })
 

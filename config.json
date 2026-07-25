@@ -29,5 +29,11 @@
     "epochs": 3,
     "batch_size": 8,
     "min_samples": 10
+  },
+  "youtube": {
+    "channel": "",
+    "sub_lang": "en",
+    "day_window": 1,
+    "scan_limit": 200
   }
 }
