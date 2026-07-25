@@ -504,9 +504,10 @@
       <option value="matched">💬 Matched (has caption)</option>
       <option value="yt">🔴 YouTube only (missed)</option>
       <option value="rejected">🚫 Rejected rows</option>
-      <option value="low">⚠ Low match (&lt;50%)</option>
+      <option value="low">⚠ Low match (&lt; %)</option>
       <option value="bookmark">★ Bookmarks</option>
     </select>
+    <label id="jump-low-wrap" style="display:none;font-size:12px;white-space:nowrap;">&lt; <input type="number" id="jump-low-pct" value="50" min="1" max="100" style="width:52px;font-size:12px;" onchange="updateJumpCount()" oninput="updateJumpCount()">%</label>
     <button class="btn btn-ghost btn-sm" onclick="jumpTo(-1)">◂ Prev</button>
     <button class="btn btn-primary btn-sm" onclick="jumpTo(1)">Next ▸</button>
     <span id="jump-count" class="text-muted" style="font-size:12px;cursor:pointer;white-space:nowrap;" ondblclick="editJumpPos()" title="Double-click to jump to a position"></span>
@@ -1145,8 +1146,8 @@ function renderImportTable() {
     if (row.speech_type === "Speaking") tr.dataset.speaking = "1";
     if (row.speech_type === "Quiet") tr.dataset.quiet = "1";
     if (row.yt_text != null) tr.dataset.matched = "1";
+    if (row.yt_sim != null) tr.dataset.sim = row.yt_sim;
     if (row.denied) tr.dataset.rejected = "1";
-    if (row.yt_sim != null && row.yt_sim < 0.5) tr.dataset.low = "1";
     if (bk.has(key)) tr.dataset.bookmark = "1";
     tr.innerHTML = `
       <td class="text-mono" style="font-size:11px;vertical-align:top;">${(row.start_time||0).toFixed(1)}s${badges}</td>
@@ -1208,8 +1209,15 @@ function jumpEdge(which) {
 window._jumpIdx = {};
 function jumpRows() {
   const cat = document.getElementById("jump-cat").value;
-  return Array.from(document.querySelectorAll(`#import-tbody tr${_jumpSel[cat] || ""}`))
-    .filter(tr => tr.style.display !== "none");
+  let rows;
+  if (cat === "low") {
+    const thr = (parseFloat(document.getElementById("jump-low-pct").value) || 50) / 100;
+    rows = Array.from(document.querySelectorAll("#import-tbody tr[data-sim]"))
+      .filter(tr => parseFloat(tr.dataset.sim) < thr);
+  } else {
+    rows = Array.from(document.querySelectorAll(`#import-tbody tr${_jumpSel[cat] || ""}`));
+  }
+  return rows.filter(tr => tr.style.display !== "none");
 }
 function updateJumpBar() {
   const bar = document.getElementById("jump-bar");
@@ -1276,7 +1284,11 @@ function editJumpPos() {
   });
   inp.addEventListener("blur", apply);
 }
-document.getElementById("jump-cat")?.addEventListener("change", () => updateJumpCount());
+document.getElementById("jump-cat")?.addEventListener("change", function () {
+  const w = document.getElementById("jump-low-wrap");
+  if (w) w.style.display = (this.value === "low") ? "" : "none";
+  updateJumpCount();
+});
 
 // Missed YouTube segment: pad short windows a little so there's audio to play/extract.
 function _missWindow(seg) {
