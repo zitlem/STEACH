@@ -802,7 +802,8 @@ async function loadMatchedSessions() {
   let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr>'
     + '<th style="text-align:left;padding:4px 8px;">Session</th>'
     + '<th style="text-align:left;padding:4px 8px;">Video</th>'
-    + '<th style="padding:4px 8px;">Match</th><th style="padding:4px 8px;">Rows</th>'
+    + '<th style="padding:4px 8px;cursor:help;" title="Mean caption↔STT agreement across the kept rows (0–100%), after number/fuzzy normalization. Higher = better alignment. Rejected rows and unmatched gaps are NOT counted.">Match ⓘ</th>'
+    + '<th style="padding:4px 8px;cursor:help;" title="Kept training rows: finalized (is_final) rows that aligned to a YouTube caption. Excludes STT-denied rows (music / hallucination / dup), partial hypotheses, junk-filtered rows, and YouTube-only gaps.">Rows ⓘ</th>'
     + '<th style="padding:4px 8px;"></th></tr></thead><tbody>';
   stems.forEach(stem => {
     const r = res[stem] || {};
