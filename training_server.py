@@ -2,6 +2,7 @@ import io
 import json
 import os
 import re
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -29,6 +30,23 @@ def load_config():
         return json.load(f)
 
 CONFIG = load_config()
+
+
+def _resolve_ytdlp():
+    """Locate yt-dlp independent of PATH (start.sh may launch us without ~/.local/bin).
+
+    Prefers a yt-dlp binary; falls back to `python -m yt_dlp` so it works whenever the
+    module is importable by this interpreter."""
+    exe = shutil.which("yt-dlp")
+    if exe:
+        return [exe]
+    for cand in (os.path.expanduser("~/.local/bin/yt-dlp"), "/usr/local/bin/yt-dlp"):
+        if os.path.exists(cand):
+            return [cand]
+    return [sys.executable, "-m", "yt_dlp"]
+
+
+YTDLP_CMD = _resolve_ytdlp()
 
 # Remembered UI state (channel, last DB path) — kept out of the git-tracked
 # config.json so it never conflicts with a git pull. Gitignored.
@@ -537,7 +555,7 @@ def _yt_flat_list(url, scan_limit):
     fast tight-window match comes up empty. Returns (entries, error).
     """
     cmd = [
-        "yt-dlp", "--ignore-errors", "--no-warnings", "--skip-download",
+        *YTDLP_CMD, "--ignore-errors", "--no-warnings", "--skip-download",
         "--flat-playlist", "--playlist-end", str(scan_limit),
         "--extractor-args", "youtubetab:approximate_date",
         "--print", "%(id)s\t%(upload_date)s\t%(duration)s\t%(title)s",
@@ -555,7 +573,7 @@ def _yt_flat_list(url, scan_limit):
 def _yt_exact_meta(video_id):
     """Extract the exact upload_date/duration for one video. Returns dict or None."""
     cmd = [
-        "yt-dlp", "--no-warnings", "--skip-download",
+        *YTDLP_CMD, "--no-warnings", "--skip-download",
         "--print", "%(id)s\t%(upload_date)s\t%(duration)s\t%(title)s",
         f"https://youtu.be/{video_id}",
     ]
@@ -684,7 +702,7 @@ def _save_resolution(db_stem, video_id, caption_lang):
 
 def _video_original_lang(yturl):
     """Return the video's original spoken-language code (e.g. 'ru'), or None."""
-    cmd = ["yt-dlp", "--no-warnings", "--skip-download", "--print", "%(language)s", yturl]
+    cmd = [*YTDLP_CMD, "--no-warnings", "--skip-download", "--print", "%(language)s", yturl]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     except (FileNotFoundError, subprocess.TimeoutExpired):
@@ -747,7 +765,7 @@ def _yt_download_captions(target, sub_lang, allow_fetch=True, force=False):
     stem = f"cap_{uuid.uuid4().hex}"
     out_tmpl = str(tmp_dir / f"{stem}.%(ext)s")
     cmd = [
-        "yt-dlp", "--no-warnings", "--skip-download", "--retries", "3",
+        *YTDLP_CMD, "--no-warnings", "--skip-download", "--retries", "3",
         "--write-auto-sub", "--sub-langs", ",".join(candidates),
         "--convert-subs", "vtt",
         "-o", out_tmpl, yturl,

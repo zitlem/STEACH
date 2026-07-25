@@ -6,6 +6,10 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+# Ensure user-installed tools (e.g. ~/.local/bin/yt-dlp) are on PATH even when
+# launched from a non-login shell.
+export PATH="$HOME/.local/bin:$PATH"
+
 GREEN='\033[0;32m'
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
