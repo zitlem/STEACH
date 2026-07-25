@@ -256,6 +256,7 @@
               <input type="text" id="import-search" placeholder="Search transcriptions..." style="flex:1;">
               <label style="font-size:12px;white-space:nowrap;color:var(--text-muted,#888);"><input type="checkbox" id="import-hide-denied" checked onchange="renderImportTable()"> hide rejected rows</label>
               <label style="font-size:12px;white-space:nowrap;color:var(--text-muted,#888);" title="Show the raw pre-correction STT text (original_text) as the reference"><input type="checkbox" id="import-show-raw" onchange="renderImportTable()"> raw STT</label>
+              <label style="font-size:12px;white-space:nowrap;color:var(--text-muted,#888);" title="Interleave the YouTube segments STT missed into the table at their time"><input type="checkbox" id="import-show-missed" checked onchange="renderImportTable()"> YouTube gaps inline</label>
               <span id="import-hidden-note" class="text-muted" style="font-size:11px;white-space:nowrap;"></span>
             </div>
             <table id="import-table">
@@ -1044,7 +1045,9 @@ function renderImportTable() {
   const escT = s => (s || "").replace(/</g, "&lt;");
   // Interleave the missed YouTube segments (speech STT skipped) at their time, so the
   // full YouTube transcript reads inline with the STT rows in chronological order.
-  const missed = (window._ytCoverage || []).filter(c => !c.matched);
+  // Toggle-controlled.
+  const showMissed = document.getElementById("import-show-missed")?.checked;
+  const missed = showMissed ? (window._ytCoverage || []).filter(c => !c.matched) : [];
   window._ytMissedSegs = missed;
   let hidden = 0;
   const items = [];
