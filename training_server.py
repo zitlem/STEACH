@@ -1545,6 +1545,16 @@ def serve_audio(filename):
     return send_from_directory(str(STT_AUDIO_DIR), filename)
 
 
+@app.route("/api/audio_file")
+def api_audio_file():
+    """Serve the full session WAV with HTTP Range support so the browser can seek/scrub
+    and play past a segment. Query param: wav (path)."""
+    wav_path = request.args.get("wav", "").strip()
+    if not wav_path.lower().endswith(".wav") or not os.path.exists(wav_path):
+        return jsonify({"error": "wav not found"}), 404
+    return send_file(wav_path, mimetype="audio/wav", conditional=True)
+
+
 @app.route("/api/preview_audio")
 def api_preview_audio():
     """Stream a sliced, resampled WAV segment for in-browser playback.

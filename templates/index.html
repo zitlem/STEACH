@@ -493,7 +493,17 @@
 
 <!-- Sticky jump-to-next bar (navigation only) -->
 <div id="jump-bar" style="position:fixed;left:0;right:0;bottom:0;z-index:900;background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -2px 10px rgba(0,0,0,.25);">
-  <div style="max-width:1500px;margin:0 auto;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+  <div style="max-width:1500px;margin:0 auto;padding:8px 16px;">
+  <div id="audio-player" style="display:none;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:7px;">
+    <button class="btn btn-ghost btn-sm" id="ap-playpause" onclick="apToggle()" title="Play/Pause">▶</button>
+    <button class="btn btn-ghost btn-sm" onclick="apSkip(-10)" title="Back 10s">⏪ 10</button>
+    <input type="range" id="ap-track" min="0" max="100" step="0.1" value="0" style="flex:1 1 240px;min-width:160px;" oninput="apSeek(this.value)">
+    <button class="btn btn-ghost btn-sm" onclick="apSkip(10)" title="Forward 10s">10 ⏩</button>
+    <span id="ap-time" class="text-muted" style="font-size:12px;white-space:nowrap;font-family:monospace;">0:00 / 0:00</span>
+    <button class="btn btn-ghost btn-sm" id="ap-continue" onclick="apContinue()" title="Keep playing past the segment">▶▶ Continue</button>
+    <button class="btn btn-ghost btn-sm" onclick="stopPreview()" title="Stop (Esc)">⏹</button>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
     <button class="btn btn-ghost btn-sm" onclick="jumpEdge('top')" title="Jump to top of table">⤒ Top</button>
     <button class="btn btn-ghost btn-sm" onclick="jumpEdge('end')" title="Jump to bottom of table">⤓ End</button>
     <strong style="font-size:13px;white-space:nowrap;">Jump to next:</strong>
@@ -512,6 +522,7 @@
     <button class="btn btn-primary btn-sm" onclick="jumpTo(1)">Next ▸</button>
     <span id="jump-count" class="text-muted" style="font-size:12px;cursor:pointer;white-space:nowrap;" ondblclick="editJumpPos()" title="Double-click to jump to a position"></span>
     <div id="section-pills" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-left:auto;"></div>
+  </div>
   </div>
 </div>
 
@@ -1053,20 +1064,53 @@ document.getElementById("tl-add-all-btn").addEventListener("click", async () => 
 // Shared audio preview player (reused across import rows)
 // ---------------------------------------------------------------------------
 const _previewAudio = new Audio();
-function stopPreview() {
-  _previewAudio.pause();
-  _previewAudio.currentTime = 0;
+window._segStart = 0; window._segEnd = null; window._autoStop = true; window._apWav = "";
+
+function _apFmt(s) { s = Math.max(0, Math.floor(s || 0)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`; }
+function apShow(on) { document.getElementById("audio-player").style.display = on ? "flex" : "none"; }
+function apUpdateIcon() { const b = document.getElementById("ap-playpause"); if (b) b.textContent = _previewAudio.paused ? "▶" : "⏸"; }
+
+// Play a [start,end] window of the full session WAV (streamed with range requests).
+// Auto-stops at `end` unless the operator hits Continue / skips / seeks.
+function playSegment(wavPath, start, end) {
+  if (!wavPath) { alert("Select a WAV file first."); return; }
+  window._segStart = start; window._segEnd = end; window._autoStop = true;
+  apShow(true);
+  const seekAndPlay = () => { try { _previewAudio.currentTime = start; } catch (e) {} _previewAudio.play(); };
+  if (window._apWav !== wavPath) {
+    window._apWav = wavPath;
+    _previewAudio.src = `/api/audio_file?wav=${encodeURIComponent(wavPath)}`;
+    _previewAudio.addEventListener("loadedmetadata", function onMeta() {
+      _previewAudio.removeEventListener("loadedmetadata", onMeta);
+      const t = document.getElementById("ap-track");
+      if (t) t.max = _previewAudio.duration || 0;
+      seekAndPlay();
+    });
+  } else {
+    seekAndPlay();
+  }
 }
+function apToggle() { if (_previewAudio.paused) _previewAudio.play(); else _previewAudio.pause(); }
+function apSkip(d) { const dur = _previewAudio.duration || 0; _previewAudio.currentTime = Math.min(dur, Math.max(0, _previewAudio.currentTime + d)); window._autoStop = false; }
+function apSeek(v) { _previewAudio.currentTime = parseFloat(v) || 0; window._autoStop = false; }
+function apContinue() { window._autoStop = false; if (_previewAudio.paused) _previewAudio.play(); }
+function stopPreview() { _previewAudio.pause(); _previewAudio.currentTime = window._segStart || 0; apShow(false); }
+
+_previewAudio.addEventListener("timeupdate", () => {
+  if (window._autoStop && window._segEnd != null && _previewAudio.currentTime >= window._segEnd) _previewAudio.pause();
+  const t = document.getElementById("ap-track");
+  if (t) t.value = _previewAudio.currentTime;
+  const lbl = document.getElementById("ap-time");
+  if (lbl) lbl.textContent = `${_apFmt(_previewAudio.currentTime)} / ${_apFmt(_previewAudio.duration)}`;
+});
+_previewAudio.addEventListener("play", apUpdateIcon);
+_previewAudio.addEventListener("pause", apUpdateIcon);
+_previewAudio.addEventListener("loadedmetadata", () => { const t = document.getElementById("ap-track"); if (t) t.max = _previewAudio.duration || 0; });
 document.addEventListener("keydown", e => { if (e.key === "Escape") stopPreview(); });
 
 function previewSegment(i) {
   const row = importRows[i];
-  const wavPath = document.getElementById("import-wav-path").value.trim();
-  if (!wavPath) { alert("Select a WAV file first."); return; }
-  const url = `/api/preview_audio?wav=${encodeURIComponent(wavPath)}&start=${row.start_time}&end=${row.end_time}`;
-  _previewAudio.pause();
-  _previewAudio.src = url;
-  _previewAudio.play();
+  playSegment(document.getElementById("import-wav-path").value.trim(), row.start_time, row.end_time);
 }
 
 
@@ -1324,12 +1368,9 @@ function _missWindow(seg) {
 }
 function previewMissed(k) {
   const seg = (window._ytMissedSegs || [])[k];
-  const wavPath = document.getElementById("import-wav-path").value.trim();
-  if (!seg || !wavPath) { alert("Select a WAV file first."); return; }
+  if (!seg) return;
   const { s, e } = _missWindow(seg);
-  _previewAudio.pause();
-  _previewAudio.src = `/api/preview_audio?wav=${encodeURIComponent(wavPath)}&start=${s}&end=${e}`;
-  _previewAudio.play();
+  playSegment(document.getElementById("import-wav-path").value.trim(), s, e);
 }
 async function addMissedSeg(k) {
   const seg = (window._ytMissedSegs || [])[k];
