@@ -156,12 +156,12 @@
   <div class="section">
     <h2>1 — Add Training Data</h2>
     <div class="tabs">
-      <button class="tab-btn active" onclick="switchTab('upload','stt',this)">STT — Audio + Transcription</button>
-      <button class="tab-btn" onclick="switchTab('upload','import',this)">Import from STT DB</button>
+      <button class="tab-btn active" onclick="switchTab('upload','import',this)">Import from STT DB</button>
+      <button class="tab-btn" onclick="switchTab('upload','stt',this)">STT — Audio + Transcription</button>
     </div>
 
     <!-- STT upload -->
-    <div class="tab-pane active" id="upload-stt">
+    <div class="tab-pane" id="upload-stt">
       <div id="drop-zone">
         <div style="font-size:28px;">&#8593;</div>
         <strong>Drop audio files here</strong>
@@ -177,7 +177,7 @@
     </div>
 
     <!-- Import from STT DB (STT training + Translation training) -->
-    <div class="tab-pane" id="upload-import">
+    <div class="tab-pane active" id="upload-import">
       <!-- Matched sessions ready for review (from the cache, no YouTube call) -->
       <div id="matched-wrap" style="margin-bottom:16px;">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
