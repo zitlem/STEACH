@@ -32,7 +32,7 @@
   },
   "youtube": {
     "channel": "",
-    "sub_lang": "en",
+    "sub_lang": "auto",
     "day_window": 1,
     "scan_limit": 300,
     "tabs": ["streams", "videos"],

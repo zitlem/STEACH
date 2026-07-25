@@ -611,38 +611,100 @@ def _yt_channel_videos(channel, date_str, day_window, scan_limit, tabs, coarse_d
     return candidates, None
 
 
+def _video_original_lang(yturl):
+    """Return the video's original spoken-language code (e.g. 'ru'), or None."""
+    cmd = ["yt-dlp", "--no-warnings", "--skip-download", "--print", "%(language)s", yturl]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    out = proc.stdout.strip().splitlines()
+    lang = out[0].strip() if out else ""
+    return lang if lang and lang != "NA" else None
+
+
+def _caption_lang_candidates(yturl, sub_lang):
+    """Ordered caption-language candidates to try.
+
+    "auto" (default) uses the video's ORIGINAL language track (e.g. ru-orig, ru)
+    so labels match the spoken audio — the right reference for training the local
+    model. An explicit sub_lang (comma-separated allowed) is used verbatim.
+    """
+    sub_lang = (sub_lang or "auto").strip()
+    if sub_lang.lower() == "auto":
+        lang = _video_original_lang(yturl)
+        cands = [f"{lang}-orig", lang] if lang else ["en"]
+    else:
+        cands = [c.strip() for c in sub_lang.split(",") if c.strip()]
+    seen, ordered = set(), []
+    for c in cands:
+        if c and c not in seen:
+            seen.add(c)
+            ordered.append(c)
+    return ordered
+
+
 def _yt_download_captions(target, sub_lang):
-    """Download auto-captions (WebVTT) for a video id/URL. Returns (vtt_text, error)."""
+    """Download original-language auto-captions (WebVTT) for a video id/URL.
+
+    Returns (vtt_text, used_lang, error).
+    """
     yturl = target if str(target).startswith("http") else f"https://youtu.be/{target}"
+    candidates = _caption_lang_candidates(yturl, sub_lang)
+    if not candidates:
+        return None, None, "could not determine a caption language (set youtube.sub_lang)"
+
     tmp_dir = Path(TRAINING_DATA_DIR) / "_yt_captions"
     tmp_dir.mkdir(parents=True, exist_ok=True)
-    out_tmpl = str(tmp_dir / f"cap_{uuid.uuid4().hex}.%(ext)s")
+    stem = f"cap_{uuid.uuid4().hex}"
+    out_tmpl = str(tmp_dir / f"{stem}.%(ext)s")
     cmd = [
-        "yt-dlp", "--no-warnings", "--skip-download",
-        "--write-auto-sub", "--sub-lang", sub_lang,
+        "yt-dlp", "--no-warnings", "--skip-download", "--retries", "3",
+        "--write-auto-sub", "--sub-langs", ",".join(candidates),
         "--convert-subs", "vtt",
         "-o", out_tmpl, yturl,
     ]
     try:
-        subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     except FileNotFoundError:
-        return None, "yt-dlp is not installed (pip install yt-dlp)"
+        return None, None, "yt-dlp is not installed (pip install yt-dlp)"
     except subprocess.TimeoutExpired:
-        return None, "yt-dlp caption download timed out"
+        return None, None, "yt-dlp caption download timed out"
 
-    stem = Path(out_tmpl.replace(".%(ext)s", "")).name
-    vtts = sorted(tmp_dir.glob(f"{stem}*.vtt"))
-    if not vtts:
-        return None, f"no auto-captions found for language '{sub_lang}'"
-    try:
-        text = vtts[0].read_text(encoding="utf-8", errors="replace")
-    finally:
+    def cleanup():
         for f in tmp_dir.glob(f"{stem}*"):
             try:
                 f.unlink()
             except OSError:
                 pass
-    return text, None
+
+    produced = list(tmp_dir.glob(f"{stem}*.vtt"))
+    # Pick the produced track by candidate priority (original first).
+    chosen, chosen_lang = None, None
+    for c in candidates:
+        for p in produced:
+            if p.name == f"{stem}.{c}.vtt":
+                chosen, chosen_lang = p, c
+                break
+        if chosen:
+            break
+    if not chosen and produced:
+        chosen = produced[0]
+        parts = chosen.name.split(".")
+        chosen_lang = parts[-2] if len(parts) >= 3 else "?"
+
+    if not chosen:
+        cleanup()
+        blob = (proc.stderr or "") + (proc.stdout or "")
+        if "429" in blob or "Too Many Requests" in blob:
+            return None, None, "YouTube rate-limited this server (HTTP 429) — wait a few minutes and retry"
+        return None, None, (f"no auto-captions available for {candidates} on this video "
+                            f"(it may have none — some services aren't captioned)")
+    try:
+        text = chosen.read_text(encoding="utf-8", errors="replace")
+    finally:
+        cleanup()
+    return text, chosen_lang, None
 
 
 def _youtube_cfg():
@@ -650,7 +712,7 @@ def _youtube_cfg():
     tabs = yt.get("tabs") or ["streams", "videos"]
     return {
         "channel": yt.get("channel", ""),
-        "sub_lang": yt.get("sub_lang", "en"),
+        "sub_lang": yt.get("sub_lang", "auto"),
         "day_window": int(yt.get("day_window", 1)),
         "scan_limit": int(yt.get("scan_limit", 300)),
         "tabs": list(tabs),
@@ -732,8 +794,8 @@ def _youtube_align(data):
         video_target = pick["video_id"]
         resolved = pick
 
-    # 2) download auto-captions
-    vtt_text, err = _yt_download_captions(video_target, sub_lang)
+    # 2) download auto-captions (original language by default)
+    vtt_text, used_lang, err = _yt_download_captions(video_target, sub_lang)
     if err:
         return None, (err, 502)
 
@@ -760,6 +822,7 @@ def _youtube_align(data):
     payload = {
         "resolved_video": resolved,
         "video": video_target,
+        "caption_lang": used_lang,
         "wav_path": wav_path,
         "offset": round(offset, 2),
         "report": report,

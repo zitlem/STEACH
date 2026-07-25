@@ -667,7 +667,7 @@ document.getElementById("yt-autolabel-btn").addEventListener("click", async () =
     reportDiv.innerHTML =
       `<div class="table-wrap" style="padding:12px;">
          <strong>YouTube auto-label — review before building</strong><br>
-         Video: <code>${data.video || ""}</code> &nbsp;|&nbsp; time offset: ${data.offset}s<br>
+         Video: <code>${data.video || ""}</code> &nbsp;|&nbsp; captions: <strong>${data.caption_lang || "?"}</strong> &nbsp;|&nbsp; time offset: ${data.offset}s<br>
          Rows to keep: <strong>${(data.kept || []).length}</strong> &nbsp;|&nbsp; skipped as junk: ${drops}<br>
          Mean caption↔original agreement: <strong>${sim}</strong> (low-match rows: ${rep.low_match_count ?? 0})<br>
          <div class="text-muted" style="font-size:11px;margin-top:6px;">
