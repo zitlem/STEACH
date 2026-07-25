@@ -1029,7 +1029,7 @@ function renderTlRows() {
     // Target cell: NLLB (STT app's machine translation) as a muted reference above the
     // editable field, which is pre-filled with YouTube's English (falls back to NLLB).
     const hasYtTr = row.yt_translation != null && row.yt_translation !== "";
-    const nllbRef = row.translated_text
+    const nllbRef = (hasYtTr && row.translated_text)
       ? `<div class="text-muted" style="font-size:12px;margin-bottom:4px;">NLLB: ${escArea(row.translated_text)}</div>`
       : "";
     const tgtVal = hasYtTr ? row.yt_translation : (row.translated_text || "");
