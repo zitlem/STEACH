@@ -340,7 +340,11 @@ def api_import_list():
             for opt in ("denied", "denied_reason", "speech_type"):
                 if opt in cols:
                     select.append(opt)
-            where = "WHERE text IS NOT NULL AND trim(text) != '' AND start_time IS NOT NULL"
+            # Finalized rows only — never the partial/emit hypotheses (is_final = 0).
+            where_parts = ["text IS NOT NULL", "trim(text) != ''", "start_time IS NOT NULL"]
+            if "is_final" in cols:
+                where_parts.append("(is_final = 1 OR is_final IS NULL)")
+            where = "WHERE " + " AND ".join(where_parts)
             total_count = conn.execute(
                 f"SELECT COUNT(*) FROM transcriptions {where}"
             ).fetchone()[0]
