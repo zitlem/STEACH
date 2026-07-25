@@ -712,61 +712,19 @@ def _video_original_lang(yturl):
     return lang if lang and lang != "NA" else None
 
 
-def _caption_lang_candidates(yturl, sub_lang):
-    """Ordered caption-language candidates to try.
+def _run_caption_download(yturl, video_id, request_langs):
+    """Download the requested caption tracks; return (vtt_text, lang, error).
 
-    "auto" (default) uses the video's ORIGINAL language track (e.g. ru-orig, ru)
-    so labels match the spoken audio — the right reference for training the local
-    model. An explicit sub_lang (comma-separated allowed) is used verbatim.
-    """
-    sub_lang = (sub_lang or "auto").strip()
-    if sub_lang.lower() == "auto":
-        lang = _video_original_lang(yturl)
-        cands = [f"{lang}-orig", lang] if lang else ["en"]
-    else:
-        cands = [c.strip() for c in sub_lang.split(",") if c.strip()]
-    seen, ordered = set(), []
-    for c in cands:
-        if c and c not in seen:
-            seen.add(c)
-            ordered.append(c)
-    return ordered
-
-
-def _yt_download_captions(target, sub_lang, allow_fetch=True, force=False):
-    """Get original-language auto-captions (WebVTT) for a video id/URL.
-
-    Prefers the local caption store; only hits YouTube on a cache miss (unless
-    force=True). Successful fetches are cached. Returns (vtt_text, used_lang, error).
-    """
-    yturl = target if str(target).startswith("http") else f"https://youtu.be/{target}"
-    video_id = _video_id_of(target)
-
-    # Explicit languages can be resolved without any network call; "auto" defers the
-    # language probe until we know the cache missed.
-    sub_lang_norm = (sub_lang or "auto").strip()
-    explicit = None
-    if sub_lang_norm.lower() != "auto":
-        explicit = [c.strip() for c in sub_lang_norm.split(",") if c.strip()]
-
-    if not force:
-        cached_text, cached_lang = _cache_get_caption(video_id, explicit)
-        if cached_text is not None:
-            return cached_text, cached_lang, None
-    if not allow_fetch:
-        return None, None, "no cached captions for this video (upload a bundle or enable fetching)"
-
-    candidates = explicit or _caption_lang_candidates(yturl, "auto")
-    if not candidates:
-        return None, None, "could not determine a caption language (set youtube.sub_lang)"
-
+    request_langs may be exact codes (e.g. 'ru-orig') or yt-dlp patterns (e.g.
+    '.*-orig' to match the original track regardless of language). The chosen track
+    is cached by its actual language."""
     tmp_dir = Path(TRAINING_DATA_DIR) / "_yt_captions"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     stem = f"cap_{uuid.uuid4().hex}"
     out_tmpl = str(tmp_dir / f"{stem}.%(ext)s")
     cmd = [
         *YTDLP_CMD, "--no-warnings", "--skip-download", "--retries", "3",
-        "--write-auto-sub", "--sub-langs", ",".join(candidates),
+        "--write-auto-sub", "--sub-langs", ",".join(request_langs),
         "--convert-subs", "vtt",
         "-o", out_tmpl, yturl,
     ]
@@ -785,9 +743,10 @@ def _yt_download_captions(target, sub_lang, allow_fetch=True, force=False):
                 pass
 
     produced = list(tmp_dir.glob(f"{stem}*.vtt"))
-    # Pick the produced track by candidate priority (original first).
+    # Prefer an exact code match; else take whatever was produced (e.g. when a
+    # pattern like '.*-orig' was requested), deriving the language from the filename.
     chosen, chosen_lang = None, None
-    for c in candidates:
+    for c in request_langs:
         for p in produced:
             if p.name == f"{stem}.{c}.vtt":
                 chosen, chosen_lang = p, c
@@ -804,14 +763,58 @@ def _yt_download_captions(target, sub_lang, allow_fetch=True, force=False):
         blob = (proc.stderr or "") + (proc.stdout or "")
         if "429" in blob or "Too Many Requests" in blob:
             return None, None, "YouTube rate-limited this server (HTTP 429) — wait a few minutes and retry"
-        return None, None, (f"no auto-captions available for {candidates} on this video "
-                            f"(it may have none — some services aren't captioned)")
+        return None, None, "no matching auto-captions produced"
     try:
         text = chosen.read_text(encoding="utf-8", errors="replace")
     finally:
         cleanup()
     _cache_put_caption(video_id, chosen_lang, text)  # store for reuse
     return text, chosen_lang, None
+
+
+def _yt_download_captions(target, sub_lang, allow_fetch=True, force=False):
+    """Get original-language auto-captions (WebVTT) for a video id/URL.
+
+    Prefers the local caption store; only hits YouTube on a cache miss (unless
+    force=True). For "auto" it grabs the ORIGINAL track directly via a '.*-orig'
+    pattern — no fragile language probe — which matches the spoken audio (the right
+    reference for training). Returns (vtt_text, used_lang, error).
+    """
+    yturl = target if str(target).startswith("http") else f"https://youtu.be/{target}"
+    video_id = _video_id_of(target)
+
+    sub_lang_norm = (sub_lang or "auto").strip()
+    explicit = None
+    if sub_lang_norm.lower() != "auto":
+        explicit = [c.strip() for c in sub_lang_norm.split(",") if c.strip()]
+
+    if not force:
+        cached_text, cached_lang = _cache_get_caption(video_id, explicit)
+        if cached_text is not None:
+            return cached_text, cached_lang, None
+    if not allow_fetch:
+        return None, None, "no cached captions for this video (upload a bundle or enable fetching)"
+
+    if explicit:
+        return _run_caption_download(yturl, video_id, explicit)
+
+    # auto: grab the original ASR track without a language probe
+    text, lang, err = _run_caption_download(yturl, video_id, [".*-orig"])
+    if text is not None:
+        return text, lang, None
+    if err and "429" in err:
+        return None, None, err
+    # Fallback: no *-orig track — probe the language and try it directly.
+    lang_code = _video_original_lang(yturl)
+    if lang_code:
+        text, lang, err2 = _run_caption_download(
+            yturl, video_id, [f"{lang_code}-orig", lang_code]
+        )
+        if text is not None:
+            return text, lang, None
+        if err2 and "429" in err2:
+            return None, None, err2
+    return None, None, "this video has no usable auto-captions (some services aren't captioned)"
 
 
 def _youtube_cfg():
