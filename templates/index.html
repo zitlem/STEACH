@@ -191,7 +191,7 @@
           <label>End row</label>
           <input type="number" id="import-row-end" placeholder="all" min="0" style="width:80px;">
         </div>
-        <button class="btn btn-ghost" onclick="fpOpen('import-db-path',window._backupDir||'/home')">Browse</button>
+        <button class="btn btn-ghost" onclick="fpOpen('import-db-path',window._backupDir||'/home','.db')">Browse</button>
         <button class="btn btn-ghost" id="import-load-btn">Load</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:14px;">
@@ -199,7 +199,7 @@
           <label>Session Audio (.wav) <span id="import-wav-note" class="text-muted" style="font-size:11px;font-weight:400;"></span></label>
           <input type="text" id="import-wav-path" placeholder="Auto-detected or browse to select companion WAV">
         </div>
-        <button class="btn btn-ghost" onclick="fpOpen('import-wav-path',window._backupDir||'/home')">Browse</button>
+        <button class="btn btn-ghost" onclick="fpOpen('import-wav-path',window._backupDir||'/home','.wav')">Browse</button>
       </div>
       <!-- YouTube auto-labeling: pull the matching video's captions (by date) and fill corrections -->
       <div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;margin-bottom:14px;">
@@ -456,6 +456,9 @@
     <div style="padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--border);display:flex;align-items:center;gap:8px;">
       <button class="btn btn-ghost btn-sm" id="fp-up-btn" onclick="fpUp()">↑ Up</button>
       <span id="fp-path" class="text-mono" style="font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"></span>
+      <label id="fp-filter-wrap" style="display:none;font-size:12px;white-space:nowrap;align-items:center;gap:4px;cursor:pointer;">
+        <input type="checkbox" id="fp-filter-chk" checked onchange="fpToggleFilter()"> only <code id="fp-filter-ext"></code>
+      </label>
     </div>
     <div id="fp-list" style="overflow-y:auto;flex:1;padding:8px 0;"></div>
     <div style="padding:12px 16px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;">
@@ -1207,9 +1210,22 @@ document.getElementById("models-refresh-btn").addEventListener("click", loadMode
 // ---------------------------------------------------------------------------
 let _fpTargetInput = null;
 let _fpCurrentPath = "/home";
+let _fpEntries = [];
+let _fpFilterExt = "";   // e.g. ".db" — empty means no filter available
+let _fpFilterOn = true;  // whether the filter toggle is currently enabled
 
-function fpOpen(inputId, startPath) {
+function fpOpen(inputId, startPath, filterExt) {
   _fpTargetInput = document.getElementById(inputId);
+  _fpFilterExt = (filterExt || "").toLowerCase();
+  _fpFilterOn = !!_fpFilterExt;
+  const wrap = document.getElementById("fp-filter-wrap");
+  if (_fpFilterExt) {
+    document.getElementById("fp-filter-ext").textContent = _fpFilterExt;
+    document.getElementById("fp-filter-chk").checked = true;
+    wrap.style.display = "flex";
+  } else {
+    wrap.style.display = "none";
+  }
   const overlay = document.getElementById("filepicker-overlay");
   overlay.style.display = "flex";
   fpNavigate(startPath || _fpTargetInput.value || "/home");
@@ -1218,6 +1234,11 @@ function fpOpen(inputId, startPath) {
 function fpClose() {
   document.getElementById("filepicker-overlay").style.display = "none";
   _fpTargetInput = null;
+}
+
+function fpToggleFilter() {
+  _fpFilterOn = document.getElementById("fp-filter-chk").checked;
+  fpRenderList();
 }
 
 async function fpNavigate(path) {
@@ -1230,10 +1251,22 @@ async function fpNavigate(path) {
   _fpCurrentPath = data.path;
   document.getElementById("fp-path").textContent = data.path;
   document.getElementById("fp-up-btn").dataset.parent = data.parent;
+  _fpEntries = data.entries || [];
+  fpRenderList();
+}
 
+function fpRenderList() {
   const list = document.getElementById("fp-list");
   list.innerHTML = "";
-  data.entries.forEach(entry => {
+  const applyFilter = _fpFilterOn && _fpFilterExt;
+  let shown = 0, hidden = 0;
+  _fpEntries.forEach(entry => {
+    // Always show directories so the user can navigate; filter only files.
+    if (applyFilter && !entry.is_dir && !entry.name.toLowerCase().endsWith(_fpFilterExt)) {
+      hidden++;
+      return;
+    }
+    shown++;
     const row = document.createElement("div");
     row.style.cssText = "display:flex;align-items:center;gap:10px;padding:6px 16px;cursor:pointer;border-radius:4px;";
     row.innerHTML = `<span style="font-size:16px;">${entry.is_dir ? "📁" : "📄"}</span>
@@ -1249,6 +1282,12 @@ async function fpNavigate(path) {
     });
     list.appendChild(row);
   });
+  if (!shown) {
+    const note = applyFilter && hidden
+      ? `No <code>${_fpFilterExt}</code> files here (${hidden} other file(s) hidden — untick “only ${_fpFilterExt}” to show all).`
+      : "Empty folder.";
+    list.innerHTML = `<div style="padding:16px;color:var(--text-muted,#888);font-size:12px;">${note}</div>`;
+  }
 }
 
 function fpUp() {
