@@ -9,3 +9,6 @@ __pycache__/
 ui_state.json
 server.log
 server.pid
+match_output/
+match_inbox/*
+!match_inbox/AGENT.md

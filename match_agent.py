@@ -115,7 +115,7 @@ def process_one(server, channel, db_path, out_zip, timeout):
     """Export one session's bundle. Returns ('ok'|'skip'|'nocap'|'ratelimit'|'error', detail)."""
     ok, _ctype, payload = _post_json(
         f"{server}/api/youtube/export",
-        {"db_path": str(db_path), "channel": channel},
+        {"db_path": str(Path(db_path).resolve()), "channel": channel},
         timeout=timeout, expect_zip=True,
     )
     if ok and isinstance(payload, (bytes, bytearray)):
