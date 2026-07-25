@@ -497,13 +497,13 @@
   <div style="max-width:1500px;margin:0 auto;padding:8px 16px;">
   <div id="audio-player" style="display:none;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:7px;">
     <button class="btn btn-ghost btn-sm" id="ap-playpause" onclick="apToggle()" title="Play/Pause">▶</button>
+    <button class="btn btn-ghost btn-sm" id="ap-continue" onclick="apContinue()" title="Keep playing past the segment">▶▶ Continue</button>
+    <button class="btn btn-ghost btn-sm" onclick="stopPreview()" title="Stop (Esc)">⏹ Stop</button>
     <button class="btn btn-ghost btn-sm" onclick="apSkip(-10)" title="Back 10s">⏪ 10</button>
     <input type="range" id="ap-track" min="0" max="100" step="0.1" value="0" style="flex:1 1 240px;min-width:160px;" oninput="apSeek(this.value)">
     <button class="btn btn-ghost btn-sm" onclick="apSkip(10)" title="Forward 10s">10 ⏩</button>
     <span id="ap-time" class="text-muted" style="font-size:12px;white-space:nowrap;font-family:monospace;">0:00 / 0:00</span>
-    <button class="btn btn-ghost btn-sm" id="ap-continue" onclick="apContinue()" title="Keep playing past the segment">▶▶ Continue</button>
     <label style="font-size:12px;white-space:nowrap;" title="Highlight & scroll to the row that's playing"><input type="checkbox" id="ap-follow" checked> follow</label>
-    <button class="btn btn-ghost btn-sm" onclick="stopPreview()" title="Stop (Esc)">⏹</button>
   </div>
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
     <button class="btn btn-ghost btn-sm" onclick="jumpEdge('top')" title="Jump to top of table">⤒ Top</button>
