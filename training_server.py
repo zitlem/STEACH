@@ -860,6 +860,7 @@ def _youtube_cfg():
         "speaking_only": bool(yt.get("speaking_only", False)),
         "min_similarity": float(yt.get("min_similarity", 0.0)),
         "align_pad": float(yt.get("align_pad", 3.0)),
+        "match_output": yt.get("match_output", "match_output"),
     }
 
 
@@ -1203,7 +1204,18 @@ def api_delete_resolution(stem):
                 removed.append(p.name)
             except OSError:
                 pass
-    return jsonify({"ok": True, "removed_captions": removed})
+
+    # Also remove the agent's bundle so a re-run re-matches cleanly (no --overwrite).
+    removed_bundle = False
+    bundle = Path(_youtube_cfg()["match_output"]) / f"steach_debug_{stem}.zip"
+    if bundle.exists():
+        try:
+            bundle.unlink()
+            removed_bundle = True
+        except OSError:
+            pass
+
+    return jsonify({"ok": True, "removed_captions": removed, "removed_bundle": removed_bundle})
 
 
 # --- Training ---

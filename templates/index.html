@@ -755,7 +755,7 @@ async function loadMatchedSessions() {
 
 // Remove a matched session from the cache (its resolution + orphaned caption file).
 async function deleteMatchedSession(stem) {
-  if (!confirm(`Remove matched session "${stem}" from the cache?\n(The source DB and any built training data are not touched.)`)) return;
+  if (!confirm(`Remove matched session "${stem}"?\nClears its cache entry, cached captions, and the agent's bundle so it will be re-matched next run.\n(The source DB and any built training data are not touched.)`)) return;
   try {
     const res = await fetch(`/api/youtube/resolution/${encodeURIComponent(stem)}`, { method: "DELETE" });
     const d = await res.json();
