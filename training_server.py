@@ -710,11 +710,19 @@ def _load_resolutions():
         return {}
 
 
-def _save_resolution(db_stem, video_id, caption_lang):
+def _save_resolution(db_stem, video_id, caption_lang, db_path=None, extra=None):
+    """Record/merge a session -> video mapping. db_path and `extra` (e.g. kept,
+    mean_similarity, title) let the 'matched sessions' panel list and open it."""
     if not db_stem or not video_id:
         return
     res = _load_resolutions()
-    res[db_stem] = {"video_id": video_id, "caption_lang": caption_lang}
+    entry = res.get(db_stem, {})
+    entry.update({"video_id": video_id, "caption_lang": caption_lang})
+    if db_path:
+        entry["db_path"] = db_path
+    if extra:
+        entry.update({k: v for k, v in extra.items() if v is not None})
+    res[db_stem] = entry
     try:
         RESOLUTIONS_FILE.write_text(json.dumps(res, indent=2, ensure_ascii=False))
     except OSError:
@@ -944,7 +952,7 @@ def _youtube_align(data):
     )
     if err:
         return None, (err, 502)
-    _save_resolution(db_stem, _video_id_of(video_target), used_lang)
+    _save_resolution(db_stem, _video_id_of(video_target), used_lang, db_path=db_path)
 
     # 3) align + label + filter
     cues = ca.parse_vtt(vtt_text)
@@ -986,6 +994,16 @@ def _youtube_align(data):
     drop_summary = {}
     for lb in dropped:
         drop_summary[lb.drop_reason] = drop_summary.get(lb.drop_reason, 0) + 1
+
+    # Enrich the cached resolution with a summary so the review panel can list it.
+    title = None
+    if resolved:
+        title = resolved.get("title") or (resolved.get("ranked") or [{}])[0].get("title")
+    _save_resolution(
+        db_stem, _video_id_of(video_target), used_lang, db_path=db_path,
+        extra={"title": title, "kept": len(kept),
+               "mean_similarity": report.get("mean_similarity")},
+    )
 
     wav_path = (data.get("wav_path") or "").strip()
     if not wav_path:

@@ -178,6 +178,17 @@
 
     <!-- Import from STT DB (STT training + Translation training) -->
     <div class="tab-pane" id="upload-import">
+      <!-- Matched sessions ready for review (from the cache, no YouTube call) -->
+      <div id="matched-wrap" style="margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <strong style="flex:1;">Matched sessions — ready for review</strong>
+          <button class="btn btn-ghost btn-sm" onclick="loadMatchedSessions()">↻ Refresh</button>
+        </div>
+        <div id="matched-list" class="table-wrap" style="padding:8px;font-size:13px;">
+          <span class="text-muted">Loading…</span>
+        </div>
+      </div>
+      <div style="font-size:12px;color:var(--text-muted,#888);margin-bottom:6px;">Or load a session manually:</div>
       <div style="display:grid;grid-template-columns:1fr auto auto auto auto;gap:10px;align-items:end;margin-bottom:10px;">
         <div>
           <label>Session Database (.db)</label>
@@ -574,7 +585,7 @@ document.getElementById("upload-all-btn").addEventListener("click", async () => 
 let importRows = [];
 let tlDbRows = [];
 
-document.getElementById("import-load-btn").addEventListener("click", async () => {
+async function loadImportDb() {
   const dbPath = document.getElementById("import-db-path").value.trim();
   const start = parseInt(document.getElementById("import-row-start").value) || 0;
   const endVal = document.getElementById("import-row-end").value.trim();
@@ -611,7 +622,8 @@ document.getElementById("import-load-btn").addEventListener("click", async () =>
   renderImportTable();
   updateTlSummary();
   renderTlRows();
-});
+}
+document.getElementById("import-load-btn").addEventListener("click", loadImportDb);
 
 // YouTube auto-labeling: PREVIEW step. Resolve the matching video by date, pull
 // its captions, align onto the loaded DB rows, and fill the import table with the
@@ -619,7 +631,7 @@ document.getElementById("import-load-btn").addEventListener("click", async () =>
 // clicks "Build training set from reviewed rows".
 window._ytDropped = new Set();
 
-document.getElementById("yt-autolabel-btn").addEventListener("click", async () => {
+async function runAutoLabelPreview(opts = {}) {
   const btn = document.getElementById("yt-autolabel-btn");
   const dbPath = document.getElementById("import-db-path").value.trim()
     || document.getElementById("import-db-path").placeholder.trim();
@@ -630,9 +642,10 @@ document.getElementById("yt-autolabel-btn").addEventListener("click", async () =
   reportDiv.style.display = "none";
   buildBtn.style.display = "none";
 
-  if (!channel) { alertDiv("yt-alert", "Enter a YouTube channel first.", "err"); return; }
+  // A cached session resolves server-side without a channel; only require it otherwise.
+  if (!opts.cached && !channel) { alertDiv("yt-alert", "Enter a YouTube channel first.", "err"); return; }
   if (!importRows.length) { alertDiv("yt-alert", "Click Load first to load the DB rows, then Auto-label.", "err"); return; }
-  rememberState({ channel });  // remember the channel for next time
+  if (channel) rememberState({ channel });  // remember the channel for next time
 
   btn.disabled = true;
   const oldLabel = btn.textContent;
@@ -698,7 +711,57 @@ document.getElementById("yt-autolabel-btn").addEventListener("click", async () =
     btn.disabled = false;
     btn.textContent = oldLabel;
   }
-});
+}
+document.getElementById("yt-autolabel-btn").addEventListener("click", () => runAutoLabelPreview());
+
+// List sessions already matched (from the server cache) so they can be reviewed with
+// one click — no manual Load + Auto-label, no YouTube call.
+async function loadMatchedSessions() {
+  const box = document.getElementById("matched-list");
+  if (!box) return;
+  box.innerHTML = '<span class="text-muted">Loading…</span>';
+  let data;
+  try { data = await (await fetch("/api/youtube/cache")).json(); }
+  catch (e) { box.innerHTML = '<span class="text-muted">Could not load cache.</span>'; return; }
+  const res = data.resolutions || {};
+  const stems = Object.keys(res).sort().reverse();
+  if (!stems.length) {
+    box.innerHTML = '<span class="text-muted">No matched sessions yet — run the match agent, or use Auto-label below.</span>';
+    return;
+  }
+  let html = '<table style="width:100%;border-collapse:collapse;"><thead><tr>'
+    + '<th style="text-align:left;padding:4px 8px;">Session</th>'
+    + '<th style="text-align:left;padding:4px 8px;">Video</th>'
+    + '<th style="padding:4px 8px;">Match</th><th style="padding:4px 8px;">Rows</th>'
+    + '<th style="padding:4px 8px;"></th></tr></thead><tbody>';
+  stems.forEach(stem => {
+    const r = res[stem] || {};
+    const sim = (typeof r.mean_similarity === "number") ? Math.round(r.mean_similarity * 100) + "%" : "—";
+    const title = (r.title || r.video_id || "").toString().replace(/</g, "&lt;");
+    const kept = (r.kept != null) ? r.kept : "—";
+    const btn = r.db_path
+      ? `<button class="btn btn-primary2 btn-sm" onclick="openCachedSession('${(r.db_path).replace(/'/g, "\\'")}')">Open</button>`
+      : `<span class="text-muted" title="uploaded without a DB path">n/a</span>`;
+    html += `<tr><td style="text-align:left;padding:4px 8px;font-family:monospace;">${stem}</td>`
+      + `<td style="text-align:left;padding:4px 8px;">${title} <span class="text-muted">(${r.caption_lang || ""})</span></td>`
+      + `<td style="padding:4px 8px;text-align:center;">${sim}</td>`
+      + `<td style="padding:4px 8px;text-align:center;">${kept}</td>`
+      + `<td style="padding:4px 8px;text-align:right;">${btn}</td></tr>`;
+  });
+  html += "</tbody></table>";
+  box.innerHTML = html;
+}
+
+// Open an already-matched session straight from cache: load its DB rows then pull the
+// cached captions/alignment — no channel needed, no YouTube call.
+async function openCachedSession(dbPath) {
+  document.getElementById("import-db-path").value = dbPath;
+  document.getElementById("import-row-start").value = "";
+  document.getElementById("import-row-end").value = "";
+  await loadImportDb();
+  if (importRows.length) await runAutoLabelPreview({ cached: true });
+  document.getElementById("import-loaded-wrap").scrollIntoView({ behavior: "smooth", block: "start" });
+}
 
 // BUILD step: extract clips for the reviewed (non-skipped) rows using the current,
 // possibly-edited, text in the table. This is the explicit gate before training.
@@ -1374,6 +1437,7 @@ async function loadAppConfig() {
 // ---------------------------------------------------------------------------
 loadAppConfig();
 loadDataset();
+loadMatchedSessions();
 loadTranslationDataset();
 loadModels();
 </script>
