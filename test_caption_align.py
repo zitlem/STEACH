@@ -140,6 +140,32 @@ def test_anchored_alignment_tracks_clock_drift():
     assert sum(l.similarity for l in single_labels) < sum(l.similarity for l in anchored)
 
 
+def test_refine_span_trims_over_capture_and_drift():
+    db = "what do we do today".split()
+    # caption window bleeds into the next sentence on both sides
+    cand = "and now what do we do today do we follow people".split()
+    refined = ca._refine_span(db, cand)
+    assert refined == ["what", "do", "we", "do", "today"]
+    # nothing in common -> empty (row will be filtered, not mislabeled)
+    assert ca._refine_span(["amen"], ["completely", "different", "words"]) == []
+
+
+def test_anchored_labeling_is_content_aware():
+    # Row's audio is one short phrase; the caption window (wide) also contains the
+    # next sentence. Content refinement must keep only the row's phrase.
+    rows = _rows(("the lord is good", 0.0, 3.0), ("sing to him", 3.0, 6.0))
+    words = [
+        {"word": "the", "t_s": 0.4}, {"word": "lord", "t_s": 0.9},
+        {"word": "is", "t_s": 1.4}, {"word": "good", "t_s": 2.2},
+        {"word": "sing", "t_s": 3.3}, {"word": "to", "t_s": 3.8}, {"word": "him", "t_s": 4.4},
+    ]
+    anchors = ca.build_anchors(rows, words)
+    labels = ca.label_rows_anchored(rows, words, anchors, pad_s=3.0)
+    assert labels[0].corrected_text == "the lord is good"   # not "...good sing to him"
+    assert labels[1].corrected_text == "sing to him"
+    assert labels[0].similarity == 1.0 and labels[1].similarity == 1.0
+
+
 def test_build_anchors_drops_backwards_pairs():
     # Two shared distinctive words, but the second occurs earlier in captions than
     # the first — a monotonic map can keep only one of them.

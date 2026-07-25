@@ -435,38 +435,57 @@ def label_rows(
     return labels
 
 
+def _refine_span(db_tokens: Sequence[str], cand_tokens: Sequence[str]) -> List[str]:
+    """Trim a time-selected caption window to the tightest run that actually matches
+    the row's text — the span from the first to the last caption token shared with the
+    DB tokens. This removes leading/trailing bleed from neighbouring sentences
+    (over-capture) and snaps phrase-boundary drift to content. Returns [] when nothing
+    matches (so the row is left empty and filtered out rather than mislabeled)."""
+    if not db_tokens or not cand_tokens:
+        return list(cand_tokens)
+    sm = SequenceMatcher(None, list(db_tokens), list(cand_tokens), autojunk=False)
+    blocks = [b for b in sm.get_matching_blocks() if b.size > 0]
+    if not blocks:
+        return []
+    lo = blocks[0].b
+    hi = blocks[-1].b + blocks[-1].size
+    return list(cand_tokens[lo:hi])
+
+
 def label_rows_anchored(
     db_rows: Sequence[Dict[str, object]],
     caption_words: Sequence[Dict[str, object]],
     anchors: Sequence[Tuple[float, float]],
-    pad_s: float = 0.5,
+    pad_s: float = 3.0,
 ) -> List[RowLabel]:
-    """Like `label_rows`, but map each caption word onto the session timeline with
-    the piecewise-linear anchor map (tracking clock drift) instead of one offset."""
+    """Anchor-map caption words onto the session timeline (tracking drift), then make
+    each row's label content-aware: gather a generous time window of caption words
+    around the row and keep only the span that matches the row's text (via
+    `_refine_span`). The wider window + content trim fixes over-capture and small
+    phrase-boundary drift that pure time-bucketing leaves behind."""
     rows = list(db_rows)
     bounds = [_row_bounds(r) for r in rows]
-    buckets: List[List[str]] = [[] for _ in rows]
 
     projected = sorted(
         ((map_caption_time(anchors, float(cw["t_s"])), str(cw["word"])) for cw in caption_words),  # type: ignore[arg-type]
         key=lambda x: x[0],
     )
-    for t, w in projected:
-        idx = _assign_row(t, bounds, pad_s)
-        if idx is not None:
-            buckets[idx].append(w)
+    times = [p[0] for p in projected]
+    toks = [p[1] for p in projected]
 
     labels: List[RowLabel] = []
-    for row, (start, end), words in zip(rows, bounds, buckets):
-        corrected = " ".join(words)
+    for row, (start, end) in zip(rows, bounds):
+        lo = bisect.bisect_left(times, start - pad_s)
+        hi = bisect.bisect_right(times, end + pad_s)
         db_text = str(row.get("text") or "")
+        refined = _refine_span(normalize(db_text).split(), toks[lo:hi])
         labels.append(RowLabel(
             transcription_id=row.get("id"),  # type: ignore[arg-type]
             start_time=start,
             end_time=end,
             db_text=db_text,
-            corrected_text=corrected,
-            similarity=_similarity(db_text, corrected),
+            corrected_text=" ".join(refined),
+            similarity=_similarity(db_text, " ".join(refined)),
         ))
     return labels
 

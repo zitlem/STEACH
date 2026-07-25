@@ -859,6 +859,7 @@ def _youtube_cfg():
         "include_denied": bool(yt.get("include_denied", False)),
         "speaking_only": bool(yt.get("speaking_only", False)),
         "min_similarity": float(yt.get("min_similarity", 0.0)),
+        "align_pad": float(yt.get("align_pad", 3.0)),
     }
 
 
@@ -969,7 +970,7 @@ def _youtube_align(data):
         # fall back to a single global offset when too few anchors are found.
         anchors = ca.build_anchors(rows, caption_words)
         if len(anchors) >= 3:
-            labels = ca.label_rows_anchored(rows, caption_words, anchors)
+            labels = ca.label_rows_anchored(rows, caption_words, anchors, pad_s=ycfg["align_pad"])
             mids = sorted(d - c for c, d in anchors)
             offset = round(mids[len(mids) // 2], 2)  # representative offset (median)
         else:
