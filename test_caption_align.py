@@ -254,3 +254,40 @@ def test_pick_video_ambiguous_same_day_ranks_by_duration():
     assert result["ambiguous"] is True
     # Closest duration to the ~3550s session wins.
     assert result["video_id"] == "evening"
+
+
+# --- title date parsing + title-driven resolution ---
+
+def test_parse_title_datetime_month_and_time():
+    dt = ca.parse_title_datetime("July 5, 2026 - 10:00 AM")
+    assert dt is not None
+    assert (dt.year, dt.month, dt.day, dt.hour, dt.minute) == (2026, 7, 5, 10, 0)
+    pm = ca.parse_title_datetime("June 28, 2026 - 6:00 PM")
+    assert (pm.month, pm.day, pm.hour) == (6, 28, 18)
+    iso = ca.parse_title_datetime("Service 2026-07-05")
+    assert (iso.year, iso.month, iso.day) == (2026, 7, 5)
+    assert ca.parse_title_datetime("no date here") is None
+
+
+def test_pick_video_prefers_title_date_over_approx_upload_date():
+    # Reproduces the real bug: a July 5 session must NOT match June 28 videos whose
+    # approximate upload_date rounded into the window, when a July 5 title exists.
+    candidates = [
+        {"id": "jun28am", "upload_date": "20260704", "title": "June 28, 2026 - 10:00 AM", "duration": 7212},
+        {"id": "jul5am", "upload_date": "20260711", "title": "July 5, 2026 - 10:00 AM", "duration": 7813},
+        {"id": "jul5pm", "upload_date": "20260711", "title": "July 5, 2026 - 6:00 PM", "duration": 5674},
+    ]
+    session = {"date": "2026-07-05", "duration_s": 7800.0, "start_wallclock": "09:32:18"}
+    result = ca.pick_video(candidates, session, day_window=1)
+    # Title date wins over the misleading approx upload_date, and 09:32 -> 10 AM service.
+    assert result["video_id"] == "jul5am"
+    assert result["ambiguous"] is True  # two July 5 services share the day
+
+
+def test_pick_video_time_of_day_breaks_am_pm_tie():
+    candidates = [
+        {"id": "am", "upload_date": "20260705", "title": "July 5, 2026 - 10:00 AM", "duration": 4000},
+        {"id": "pm", "upload_date": "20260705", "title": "July 5, 2026 - 6:00 PM", "duration": 4000},
+    ]
+    evening = {"date": "2026-07-05", "duration_s": 4000.0, "start_wallclock": "18:05:00"}
+    assert ca.pick_video(candidates, evening, day_window=1)["video_id"] == "pm"

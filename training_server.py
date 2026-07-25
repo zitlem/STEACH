@@ -570,10 +570,11 @@ def _yt_exact_meta(video_id):
 def _yt_channel_videos(channel, date_str, day_window, scan_limit, tabs, coarse_days):
     """Resolve candidate videos near `date_str` (YYYY-MM-DD) across the channel tabs.
 
-    Fast path: flat-list each tab (~1s) and keep videos whose approximate date is in
-    the tight window — approximate dates are exact for recent videos, which is the
-    common case. Fallback (older sessions, where approximate dates round coarser):
-    widen the shortlist and confirm each candidate's exact date. Returns
+    Flat-lists each tab (~1s). The reliable match key is the video TITLE date
+    (exact), because YouTube's flat-list "approximate" dates round coarser for older
+    videos and can put the wrong videos in the target window. Title-dated videos are
+    shortlisted directly; any without a parseable title date fall back to a wider
+    approximate window and get their exact upload_date confirmed. Returns
     (candidates, error); candidates are {id, upload_date, title, duration}.
     """
     urls = _channel_tab_urls(channel, tabs)
@@ -595,29 +596,30 @@ def _yt_channel_videos(channel, date_str, day_window, scan_limit, tabs, coarse_d
     if not any_ok:
         return None, listing_err or "yt-dlp could not list the channel"
 
-    def in_window(lo_days, hi_days):
-        lo, hi = center - timedelta(days=lo_days), center + timedelta(days=hi_days)
-        return {vid: e for vid, e in merged.items()
-                if (_dt_yyyymmdd(e.get("upload_date")) or datetime.min) >= lo
-                and (_dt_yyyymmdd(e.get("upload_date")) or datetime.max) <= hi}
-
-    # Fast path: approximate date already accurate for recent videos.
-    tight = in_window(day_window, day_window + 1)
-    if tight:
-        return list(tight.values()), None
-
-    # Fallback: approximate dates round newer for old videos — widen, then confirm
-    # exact dates for the shortlist so the ±day_window match stays correct.
-    wide = in_window(2, coarse_days)
     candidates = []
-    for vid, e in wide.items():
-        exact = _yt_exact_meta(vid)
-        candidates.append({
-            "id": vid,
-            "upload_date": (exact or {}).get("upload_date") or e.get("upload_date"),
-            "duration": (exact or {}).get("duration") or e.get("duration") or 0.0,
-            "title": e.get("title", ""),
-        })
+    for vid, e in merged.items():
+        title_dt = ca.parse_title_datetime(e.get("title"))
+        if title_dt is not None:
+            # Exact date from the title — keep if within the tight window.
+            if abs((title_dt.date() - center.date()).days) <= day_window:
+                candidates.append({
+                    "id": vid,
+                    "upload_date": title_dt.strftime("%Y%m%d"),
+                    "duration": e.get("duration") or 0.0,
+                    "title": e.get("title", ""),
+                })
+            continue
+        # No title date: approximate date is our only cheap signal — keep a generous
+        # shortlist (approx rounds newer for old videos), confirm exact dates below.
+        adt = _dt_yyyymmdd(e.get("upload_date"))
+        if adt and (center - timedelta(days=2)) <= adt <= (center + timedelta(days=coarse_days)):
+            exact = _yt_exact_meta(vid)
+            candidates.append({
+                "id": vid,
+                "upload_date": (exact or {}).get("upload_date") or e.get("upload_date"),
+                "duration": (exact or {}).get("duration") or e.get("duration") or 0.0,
+                "title": e.get("title", ""),
+            })
     return candidates, None
 
 

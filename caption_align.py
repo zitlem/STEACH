@@ -460,6 +460,76 @@ def _parse_upload_date(value: object) -> Optional[datetime]:
         return None
 
 
+_MONTHS = {m.lower(): i for i, m in enumerate(
+    ["January", "February", "March", "April", "May", "June", "July",
+     "August", "September", "October", "November", "December"], 1)}
+_MONTHS.update({name[:3]: i for name, i in list(_MONTHS.items())})
+_MONTHS["sept"] = 9
+_TITLE_MONTH_RE = re.compile(r"([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})")
+_TITLE_ISO_RE = re.compile(r"(\d{4})-(\d{2})-(\d{2})")
+_TITLE_TIME_RE = re.compile(r"(\d{1,2}):(\d{2})\s*([AaPp][Mm])?")
+
+
+def parse_title_datetime(title: Optional[str]) -> Optional[datetime]:
+    """Parse a date (and optional time) from a video title like
+    "July 5, 2026 - 10:00 AM" or "2026-07-05". Returns None if no date is found.
+
+    Titles carry the exact service date/time, unlike YouTube's approximate flat-list
+    upload dates (which round coarser for older videos), so this is the reliable key
+    for matching a channel video to a session.
+    """
+    if not title:
+        return None
+    t = str(title)
+    dt: Optional[datetime] = None
+    m = _TITLE_MONTH_RE.search(t)
+    if m and m.group(1).lower() in _MONTHS:
+        try:
+            dt = datetime(int(m.group(3)), _MONTHS[m.group(1).lower()], int(m.group(2)))
+        except ValueError:
+            dt = None
+    if dt is None:
+        mi = _TITLE_ISO_RE.search(t)
+        if mi:
+            try:
+                dt = datetime(int(mi.group(1)), int(mi.group(2)), int(mi.group(3)))
+            except ValueError:
+                dt = None
+    if dt is None:
+        return None
+    tm = _TITLE_TIME_RE.search(t)
+    if tm:
+        hh, mm, ap = int(tm.group(1)), int(tm.group(2)), tm.group(3)
+        if ap:
+            ap = ap.lower()
+            if ap == "pm" and hh != 12:
+                hh += 12
+            elif ap == "am" and hh == 12:
+                hh = 0
+        if 0 <= hh < 24 and 0 <= mm < 60:
+            dt = dt.replace(hour=hh, minute=mm)
+    return dt
+
+
+def _title_minutes(title: Optional[str]) -> Optional[int]:
+    """Minutes-since-midnight from a title's time, or None when no explicit time."""
+    dt = parse_title_datetime(title)
+    if dt is None or (dt.hour == 0 and dt.minute == 0):
+        return None
+    return dt.hour * 60 + dt.minute
+
+
+def _session_minutes(session: Dict[str, object]) -> Optional[int]:
+    sw = session.get("start_wallclock")
+    if not sw:
+        return None
+    try:
+        hh, mm, _ss = str(sw).split(":")
+        return int(hh) * 60 + int(mm)
+    except (ValueError, AttributeError):
+        return None
+
+
 def pick_video(
     candidates: Sequence[Dict[str, object]],
     session: Dict[str, object],
@@ -483,27 +553,36 @@ def pick_video(
         return result
 
     session_duration = float(session.get("duration_s") or 0.0)  # type: ignore[arg-type]
+    session_min = _session_minutes(session)
 
-    scored: List[Tuple[int, float, Dict[str, object]]] = []
+    scored: List[Tuple[int, float, float, Dict[str, object]]] = []
     same_day = 0
     for cand in candidates:
-        up = _parse_upload_date(cand.get("upload_date"))
-        if up is None:
+        # Prefer the exact date parsed from the title; fall back to upload_date.
+        cdt = parse_title_datetime(cand.get("title")) or _parse_upload_date(cand.get("upload_date"))  # type: ignore[arg-type]
+        if cdt is None:
             continue
-        day_diff = abs((up - session_date).days)
+        day_diff = abs((cdt.date() - session_date.date()).days)
         if day_diff > day_window:
             continue
         if day_diff == 0:
             same_day += 1
+        # Same-day tie-break: closeness of the service time (title) to the session.
+        tmin = _title_minutes(cand.get("title"))  # type: ignore[arg-type]
+        time_diff = (
+            abs(tmin - session_min)
+            if (tmin is not None and session_min is not None)
+            else float("inf")
+        )
         cand_duration = float(cand.get("duration") or 0.0)  # type: ignore[arg-type]
         dur_diff = (
             abs(cand_duration - session_duration)
             if (cand_duration and session_duration)
             else float("inf")
         )
-        scored.append((day_diff, dur_diff, cand))
+        scored.append((day_diff, time_diff, dur_diff, cand))
 
-    scored.sort(key=lambda x: (x[0], x[1]))
+    scored.sort(key=lambda x: (x[0], x[1], x[2]))
     ranked = [
         {
             "id": c.get("id"),
@@ -512,7 +591,7 @@ def pick_video(
             "duration": c.get("duration"),
             "day_diff": dd,
         }
-        for dd, _dur, c in scored
+        for dd, _tdiff, _dur, c in scored
     ]
     result["ranked"] = ranked
     if ranked:
