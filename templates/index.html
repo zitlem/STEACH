@@ -264,8 +264,7 @@
                 <th>Time</th>
                 <th>STT (reference) → editable YouTube caption (the training label)</th>
                 <th style="width:70px;">Duration</th>
-                <th style="width:90px;">Preview</th>
-                <th style="width:80px;"></th>
+                <th style="width:180px;">Actions</th>
               </tr></thead>
               <tbody id="import-tbody"></tbody>
             </table>
@@ -506,8 +505,6 @@
     <button class="btn btn-ghost btn-sm" onclick="jumpTo(-1)">◂ Prev</button>
     <button class="btn btn-primary btn-sm" onclick="jumpTo(1)">Next ▸</button>
     <span id="jump-count" class="text-muted" style="font-size:12px;cursor:pointer;white-space:nowrap;" ondblclick="editJumpPos()" title="Double-click to jump to a position"></span>
-    <span style="flex:1;"></span>
-    <button class="btn btn-ghost btn-sm" id="stop-audio-btn" onclick="stopPreview()" title="Stop audio (Esc)" disabled>⏹ Stop</button>
   </div>
 </div>
 
@@ -1040,19 +1037,10 @@ document.getElementById("tl-add-all-btn").addEventListener("click", async () => 
 // Shared audio preview player (reused across import rows)
 // ---------------------------------------------------------------------------
 const _previewAudio = new Audio();
-function _setStopBtn(on) {
-  const b = document.getElementById("stop-audio-btn");
-  if (b) b.disabled = !on;
-}
 function stopPreview() {
   _previewAudio.pause();
   _previewAudio.currentTime = 0;
-  _setStopBtn(false);
 }
-_previewAudio.addEventListener("playing", () => _setStopBtn(true));
-_previewAudio.addEventListener("play", () => _setStopBtn(true));
-_previewAudio.addEventListener("pause", () => _setStopBtn(false));
-_previewAudio.addEventListener("ended", () => _setStopBtn(false));
 document.addEventListener("keydown", e => { if (e.key === "Escape") stopPreview(); });
 
 function previewSegment(i) {
@@ -1118,8 +1106,10 @@ function renderImportTable() {
         <td><div class="text-muted" style="font-size:12px;margin-bottom:4px;">STT: <em>(missed — no row)</em></div>
           <input type="text" class="miss-text-input" value="${esc(seg.text)}" data-k="${k}" title="YouTube caption STT missed — edit to correct"></td>
         <td class="text-muted">${fmtDuration((seg.end_s||0)-(seg.start_s||0))}</td>
-        <td>${starBtn(key)} <button class="btn btn-ghost btn-sm" onclick="previewMissed(${k})" title="Play audio">▶</button></td>
-        <td><button class="btn btn-primary2 btn-sm" id="miss-add-btn-${k}" onclick="addMissedSeg(${k})">Add</button></td>`;
+        <td style="white-space:nowrap;">${starBtn(key)}
+          <button class="btn btn-ghost btn-sm" onclick="previewMissed(${k})" title="Play audio">▶</button>
+          <button class="btn btn-ghost btn-sm" onclick="stopPreview()" title="Stop audio">⏹</button>
+          <button class="btn btn-primary2 btn-sm" id="miss-add-btn-${k}" onclick="addMissedSeg(${k})">Add</button></td>`;
       tbody.appendChild(tr);
       return;
     }
@@ -1154,8 +1144,9 @@ function renderImportTable() {
       <td class="text-mono" style="font-size:11px;vertical-align:top;">${(row.start_time||0).toFixed(1)}s${badges}</td>
       <td>${ref}<input type="text" class="import-text-input" value="${esc(fieldVal)}" data-i="${i}" title="${hasYt ? "YouTube caption — edit to correct" : "STT transcription"}"></td>
       <td class="text-muted">${fmtDuration((row.end_time||0)-(row.start_time||0))}</td>
-      <td>${starBtn(key)} ${previewCell}</td>
-      <td><button class="btn btn-primary2 btn-sm" id="import-add-btn-${i}" onclick="addSttRow(${i})">Add</button></td>`;
+      <td style="white-space:nowrap;">${starBtn(key)} ${previewCell}
+        ${hasAudio ? `<button class="btn btn-ghost btn-sm" onclick="stopPreview()" title="Stop audio">⏹</button>` : ""}
+        <button class="btn btn-primary2 btn-sm" id="import-add-btn-${i}" onclick="addSttRow(${i})">Add</button></td>`;
     tbody.appendChild(tr);
   });
   updateJumpBar();
