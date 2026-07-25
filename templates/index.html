@@ -36,6 +36,7 @@
   .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
   .tab-btn.active.translation { color: var(--accent2); border-bottom-color: var(--accent2); }
   .tab-pane { display: none; }
+  tr.now-playing { box-shadow: inset 0 0 0 2px var(--accent, #3b82f6); background: rgba(59,130,246,.10); }
   .tab-pane.active { display: block; }
   .sub-tabs { display:flex; gap:0; border-bottom:1px solid var(--border); margin-bottom:16px; }
   .sub-tab-btn { padding:6px 16px; background:none; border:none; border-bottom:2px solid transparent; color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; margin-bottom:-1px; transition:color .15s,border-color .15s; }
@@ -501,6 +502,7 @@
     <button class="btn btn-ghost btn-sm" onclick="apSkip(10)" title="Forward 10s">10 ⏩</button>
     <span id="ap-time" class="text-muted" style="font-size:12px;white-space:nowrap;font-family:monospace;">0:00 / 0:00</span>
     <button class="btn btn-ghost btn-sm" id="ap-continue" onclick="apContinue()" title="Keep playing past the segment">▶▶ Continue</button>
+    <label style="font-size:12px;white-space:nowrap;" title="Highlight & scroll to the row that's playing"><input type="checkbox" id="ap-follow" checked> follow</label>
     <button class="btn btn-ghost btn-sm" onclick="stopPreview()" title="Stop (Esc)">⏹</button>
   </div>
   <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
@@ -1094,7 +1096,26 @@ function apToggle() { if (_previewAudio.paused) _previewAudio.play(); else _prev
 function apSkip(d) { const dur = _previewAudio.duration || 0; _previewAudio.currentTime = Math.min(dur, Math.max(0, _previewAudio.currentTime + d)); window._autoStop = false; }
 function apSeek(v) { _previewAudio.currentTime = parseFloat(v) || 0; window._autoStop = false; }
 function apContinue() { window._autoStop = false; if (_previewAudio.paused) _previewAudio.play(); }
-function stopPreview() { _previewAudio.pause(); _previewAudio.currentTime = window._segStart || 0; apShow(false); }
+function _apClearRow() { if (window._apRow) { window._apRow.classList.remove("now-playing"); window._apRow = null; } }
+function stopPreview() { _previewAudio.pause(); _previewAudio.currentTime = window._segStart || 0; apShow(false); _apClearRow(); }
+
+// Follow playback: highlight (and optionally scroll to) the table row whose [start,end]
+// window contains the current time.
+function apFollow(t) {
+  const cur = window._apRow;
+  if (cur && t >= parseFloat(cur.dataset.start) && t <= parseFloat(cur.dataset.end)) return;  // still in it
+  let target = null;
+  for (const tr of document.querySelectorAll("#import-tbody tr[data-start]")) {
+    if (t >= parseFloat(tr.dataset.start) && t <= parseFloat(tr.dataset.end)) { target = tr; break; }
+  }
+  if (target === cur) return;
+  _apClearRow();
+  if (target) {
+    target.classList.add("now-playing");
+    window._apRow = target;
+    if (document.getElementById("ap-follow")?.checked) target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+}
 
 _previewAudio.addEventListener("timeupdate", () => {
   if (window._autoStop && window._segEnd != null && _previewAudio.currentTime >= window._segEnd) _previewAudio.pause();
@@ -1102,6 +1123,7 @@ _previewAudio.addEventListener("timeupdate", () => {
   if (t) t.value = _previewAudio.currentTime;
   const lbl = document.getElementById("ap-time");
   if (lbl) lbl.textContent = `${_apFmt(_previewAudio.currentTime)} / ${_apFmt(_previewAudio.duration)}`;
+  if (!_previewAudio.paused) apFollow(_previewAudio.currentTime);
 });
 _previewAudio.addEventListener("play", apUpdateIcon);
 _previewAudio.addEventListener("pause", apUpdateIcon);
@@ -1159,6 +1181,7 @@ function renderImportTable() {
       tr.style.background = "rgba(192,57,43,.08)";
       tr.dataset.key = key;
       tr.dataset.yt = "1";
+      tr.dataset.start = seg.start_s; tr.dataset.end = seg.end_s;
       if (bk.has(key)) tr.dataset.bookmark = "1";
       tr.innerHTML = `
         <td class="text-mono" style="font-size:11px;vertical-align:top;">${(seg.start_s||0).toFixed(1)}s
@@ -1196,6 +1219,7 @@ function renderImportTable() {
     if (row.yt_drop || row.denied) tr.style.opacity = "0.45";
     const key = `row:${row.id}`;
     tr.dataset.key = key;
+    tr.dataset.start = row.start_time; tr.dataset.end = row.end_time;
     if (row.speech_type === "Music") tr.dataset.music = "1";
     if (row.speech_type === "Speaking") tr.dataset.speaking = "1";
     if (row.speech_type === "Quiet") tr.dataset.quiet = "1";
