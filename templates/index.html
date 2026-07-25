@@ -23,7 +23,7 @@
   }
   body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; font-size: 14px; line-height: 1.5; }
   h2 { font-size: 18px; font-weight: 600; margin-bottom: 16px; }
-  .page { max-width: 1100px; margin: 0 auto; padding: 24px 16px 80px; }
+  .page { max-width: 1500px; margin: 0 auto; padding: 24px 16px 80px; }
   .header { display: flex; align-items: center; gap: 12px; margin-bottom: 32px; }
   .header h1 { font-size: 22px; font-weight: 700; }
   .tag { background: var(--accent); color: #fff; border-radius: 4px; padding: 2px 8px; font-size: 11px; font-weight: 700; letter-spacing: .08em; }
@@ -259,7 +259,7 @@
             <table id="import-table">
               <thead><tr>
                 <th>Time</th>
-                <th>Transcription — editable label (YouTube caption when matched; STT shown below)</th>
+                <th>STT (reference) → editable YouTube caption (the training label)</th>
                 <th style="width:70px;">Duration</th>
                 <th style="width:90px;">Preview</th>
                 <th style="width:80px;"></th>
@@ -1005,17 +1005,19 @@ function renderImportTable() {
     }
     // The editable field holds the YouTube caption when matched (the label to train on);
     // otherwise the DB text. When matched, show the STT text as a muted reference.
+    // Mirror the translation view: STT text on top as the source, the editable
+    // YouTube caption below as the label to train on.
     const hasYt = row.yt_text != null;
     const fieldVal = hasYt ? row.yt_text : (row.text || "");
     const sttText = (showRaw && row.original_text) ? row.original_text : (row.text || "");
     const ref = hasYt
-      ? `<div class="text-muted" style="font-size:11px;margin-top:3px;">STT: ${escT(sttText)}</div>`
+      ? `<div class="text-muted" style="font-size:12px;margin-bottom:4px;">STT: ${escT(sttText)}</div>`
       : "";
     const tr = document.createElement("tr");
     if (row.yt_drop || row.denied) tr.style.opacity = "0.45";
     tr.innerHTML = `
-      <td class="text-mono" style="font-size:11px;">${(row.start_time||0).toFixed(1)}s${badges}</td>
-      <td><input type="text" class="import-text-input" value="${esc(fieldVal)}" data-i="${i}" title="${hasYt ? "YouTube caption — edit to correct" : "STT transcription"}">${ref}</td>
+      <td class="text-mono" style="font-size:11px;vertical-align:top;">${(row.start_time||0).toFixed(1)}s${badges}</td>
+      <td>${ref}<input type="text" class="import-text-input" value="${esc(fieldVal)}" data-i="${i}" title="${hasYt ? "YouTube caption — edit to correct" : "STT transcription"}"></td>
       <td class="text-muted">${fmtDuration((row.end_time||0)-(row.start_time||0))}</td>
       <td>${previewCell}</td>
       <td><button class="btn btn-primary2 btn-sm" id="import-add-btn-${i}" onclick="addSttRow(${i})">Add</button></td>`;
