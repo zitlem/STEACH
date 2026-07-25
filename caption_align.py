@@ -407,13 +407,120 @@ class RowLabel:
         }
 
 
+# Number words -> value, so a spoken chapter/verse reference matches its digit form
+# ("третья"=3, "двадцать первого"=21). Additive over units/teens (0-19), tens (20-90) and
+# сто (100) covers references up to ~150 (e.g. Psalm 150). Russian first (+ a little English).
+_RU_NUMERALS = {
+    0: "ноль нулевой",
+    1: "один одна одно одного одной первый первая первое первого первой первых",
+    2: "два две двух второй вторая второе второго вторых",
+    3: "три трех трёх третий третья третье третьего третьей третьих",
+    4: "четыре четырех четырёх четвертый четвёртый четвертая четвёртая четвертого четвёртого",
+    5: "пять пяти пятый пятая пятое пятого пятой пятых",
+    6: "шесть шести шестой шестая шестое шестого",
+    7: "семь семи седьмой седьмая седьмое седьмого",
+    8: "восемь восьми восьмой восьмая восьмого",
+    9: "девять девяти девятый девятая девятого",
+    10: "десять десяти десятый десятая десятого",
+    11: "одиннадцать одиннадцати одиннадцатый одиннадцатая одиннадцатого",
+    12: "двенадцать двенадцати двенадцатый двенадцатая двенадцатого",
+    13: "тринадцать тринадцати тринадцатый тринадцатого",
+    14: "четырнадцать четырнадцати четырнадцатый четырнадцатого",
+    15: "пятнадцать пятнадцати пятнадцатый пятнадцатого",
+    16: "шестнадцать шестнадцати шестнадцатый шестнадцатого",
+    17: "семнадцать семнадцати семнадцатый семнадцатого",
+    18: "восемнадцать восемнадцати восемнадцатый восемнадцатого",
+    19: "девятнадцать девятнадцати девятнадцатый девятнадцатого",
+    20: "двадцать двадцати двадцатый двадцатая двадцатого",
+    30: "тридцать тридцати тридцатый тридцатого",
+    40: "сорок сорока сороковой сорокового",
+    50: "пятьдесят пятидесяти пятидесятый пятидесятого",
+    60: "шестьдесят шестидесяти шестидесятый",
+    70: "семьдесят семидесяти семидесятый",
+    80: "восемьдесят восьмидесяти восьмидесятый восьмидесятого",
+    90: "девяносто девяноста девяностый",
+    100: "сто ста сотый сотая сотого",
+}
+_EN_NUMERALS = {
+    0: "zero", 1: "one first", 2: "two second", 3: "three third", 4: "four fourth",
+    5: "five fifth", 6: "six sixth", 7: "seven seventh", 8: "eight eighth", 9: "nine ninth",
+    10: "ten tenth", 11: "eleven eleventh", 12: "twelve twelfth", 13: "thirteen thirteenth",
+    14: "fourteen fourteenth", 15: "fifteen fifteenth", 16: "sixteen sixteenth",
+    17: "seventeen seventeenth", 18: "eighteen eighteenth", 19: "nineteen nineteenth",
+    20: "twenty twentieth", 30: "thirty thirtieth", 40: "forty fortieth", 50: "fifty fiftieth",
+    60: "sixty sixtieth", 70: "seventy seventieth", 80: "eighty eightieth", 90: "ninety ninetieth",
+    100: "hundred hundredth",
+}
+
+
+def _build_num_words() -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for table in (_RU_NUMERALS, _EN_NUMERALS):
+        for value, forms in table.items():
+            for word in forms.split():
+                out[word] = value
+    return out
+
+
+_NUM_WORDS = _build_num_words()
+
+
+def _num_value(tok: str) -> Optional[int]:
+    if tok.isdigit():
+        try:
+            return int(tok)
+        except ValueError:
+            return None
+    return _NUM_WORDS.get(tok)
+
+
+def _normalize_numbers(tokens: Sequence[str]) -> List[str]:
+    """Collapse runs of number tokens (digits or spelled numbers) into one digit string
+    by additive value, so '3'/'третья' and '21'/'двадцать первого' compare equal."""
+    out: List[str] = []
+    acc: Optional[int] = None
+    for t in tokens:
+        v = _num_value(t)
+        if v is not None:
+            acc = v if acc is None else acc + v
+        else:
+            if acc is not None:
+                out.append(str(acc))
+                acc = None
+            out.append(t)
+    if acc is not None:
+        out.append(str(acc))
+    return out
+
+
+def _fuzzy_token_ratio(ta: Sequence[str], tb: Sequence[str], floor: float = 0.6) -> float:
+    """difflib-shaped token ratio with partial credit for near-identical replaced tokens
+    (e.g. еремии↔еремия), so declension/typo variants don't count as full mismatches."""
+    if not ta and not tb:
+        return 1.0
+    if not ta or not tb:
+        return 0.0
+    sm = SequenceMatcher(None, list(ta), list(tb))
+    credit = 0.0
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag == "equal":
+            credit += (i2 - i1)
+        elif tag == "replace":
+            for k in range(min(i2 - i1, j2 - j1)):
+                r = SequenceMatcher(None, ta[i1 + k], tb[j1 + k]).ratio()
+                if r >= floor:
+                    credit += r
+        # insert / delete contribute nothing
+    return 2.0 * credit / (len(ta) + len(tb))
+
+
 def _similarity(a: str, b: str) -> float:
     na, nb = normalize(a), normalize(b)
     if not na and not nb:
         return 1.0
     if not na or not nb:
         return 0.0
-    return SequenceMatcher(None, na.split(), nb.split()).ratio()
+    return _fuzzy_token_ratio(_normalize_numbers(na.split()), _normalize_numbers(nb.split()))
 
 
 def _assign_row(t: float, bounds: Sequence[Tuple[float, float]], pad_s: float) -> Optional[int]:

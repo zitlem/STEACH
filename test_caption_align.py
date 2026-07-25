@@ -166,6 +166,29 @@ def test_anchored_labeling_is_content_aware():
     assert labels[0].similarity == 1.0 and labels[1].similarity == 1.0
 
 
+def test_normalize_numbers_spelled_to_digits():
+    assert ca._normalize_numbers("третья глава".split()) == ["3", "глава"]
+    assert ca._normalize_numbers("двадцать первого стиха".split()) == ["21", "стиха"]
+    assert ca._normalize_numbers("сто пятьдесят".split()) == ["150"]
+    assert ca._normalize_numbers("глава 3 стих 21".split()) == ["глава", "3", "стих", "21"]
+    # non-number words pass through untouched
+    assert ca._normalize_numbers("книга плач".split()) == ["книга", "плач"]
+
+
+def test_similarity_number_and_fuzzy():
+    stt = "Книга «Плач Еремии», 3 глава, 21 стиха."
+    yt = "книга плач еремия третья глава с двадцать первого стиха"
+    sim = ca._similarity(stt, yt)
+    assert sim >= 0.85, sim                      # was ~0.50 with exact word matching
+    # different verse numbers must NOT be inflated to a match
+    assert ca._similarity("3 глава", "5 глава") < 0.7
+    # fuzzy credit for a declension variant, but not for unrelated words
+    assert ca._similarity("еремии", "еремия") >= 0.7
+    assert ca._similarity("alpha beta gamma", "totally unrelated text") < 0.3
+    # exact still 1.0
+    assert ca._similarity("hello world", "hello world") == 1.0
+
+
 def test_caption_coverage_flags_missed_segments():
     rows = _rows(("hello world", 0.0, 3.0))  # STT only covers 0–3s
     words = [
