@@ -926,8 +926,21 @@ def _youtube_align(data):
     if not caption_words:
         return None, ("captions parsed but contained no words", 422)
     offset_val = data.get("offset")
-    offset = float(offset_val) if offset_val is not None else ca.estimate_offset(rows, caption_words)
-    labels = ca.label_rows(rows, caption_words, offset)
+    anchors = []
+    if offset_val is not None:
+        offset = float(offset_val)
+        labels = ca.label_rows(rows, caption_words, offset)
+    else:
+        # Anchor-based piecewise alignment tracks clock drift over a long service;
+        # fall back to a single global offset when too few anchors are found.
+        anchors = ca.build_anchors(rows, caption_words)
+        if len(anchors) >= 3:
+            labels = ca.label_rows_anchored(rows, caption_words, anchors)
+            mids = sorted(d - c for c, d in anchors)
+            offset = round(mids[len(mids) // 2], 2)  # representative offset (median)
+        else:
+            offset = ca.estimate_offset(rows, caption_words)
+            labels = ca.label_rows(rows, caption_words, offset)
     kept, dropped = ca.filter_labels(labels)
     report = ca.match_report(kept)
 
@@ -946,6 +959,7 @@ def _youtube_align(data):
         "caption_lang": used_lang,
         "wav_path": wav_path,
         "offset": round(offset, 2),
+        "anchors": len(anchors),
         "report": report,
         "_captions_vtt": vtt_text,   # private: consumed by the debug export
         "_db_path": db_path,

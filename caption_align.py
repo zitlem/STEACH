@@ -19,6 +19,8 @@ Video resolution (channel + session date -> video id):
 
 from __future__ import annotations
 
+import bisect
+import html
 import re
 import statistics
 from collections import defaultdict
@@ -106,7 +108,7 @@ def parse_vtt(vtt_text: str) -> List[Cue]:
         while i < n and lines[i].strip() != "" and not _TIMING_RE.search(lines[i]):
             text_lines.append(lines[i])
             i += 1
-        text = " ".join(tl.strip() for tl in text_lines if tl.strip())
+        text = html.unescape(" ".join(tl.strip() for tl in text_lines if tl.strip()))
         if text:
             cues.append(Cue(start_s=start, end_s=end, text=text))
     return cues
@@ -253,6 +255,85 @@ def estimate_offset(
 
 
 # ---------------------------------------------------------------------------
+# Anchor-based piecewise alignment
+#
+# A single global offset drifts over a long service (the STT and YouTube clocks
+# don't advance identically — pauses, re-syncs). Instead, find anchor points where
+# a distinctive word occurs exactly once in each stream, giving trustworthy
+# (caption_time -> db_time) pairs, keep only a monotonically consistent subset, and
+# interpolate between them. This tracks drift across the whole recording.
+# ---------------------------------------------------------------------------
+
+def build_anchors(
+    db_rows: Sequence[Dict[str, object]],
+    caption_words: Sequence[Dict[str, object]],
+    min_word_len: int = 4,
+) -> List[Tuple[float, float]]:
+    """Return sorted, monotonically-consistent (caption_time, db_time) anchor pairs.
+
+    Anchors come from distinctive words (length >= min_word_len) that appear exactly
+    once in both the DB transcript and the captions, so each pair is unambiguous.
+    A longest-increasing-subsequence filter then drops pairs that would require the
+    timelines to run backwards relative to each other (mismatched coincidences).
+    """
+    db_idx: Dict[str, List[float]] = defaultdict(list)
+    for w, t in _db_word_stream(db_rows):
+        db_idx[w].append(t)
+    cap_idx: Dict[str, List[float]] = defaultdict(list)
+    for cw in caption_words:
+        cap_idx[str(cw["word"])].append(float(cw["t_s"]))  # type: ignore[arg-type]
+
+    pairs: List[Tuple[float, float]] = []
+    for w, cts in cap_idx.items():
+        dts = db_idx.get(w)
+        if dts and len(cts) == 1 and len(dts) == 1 and len(w) >= min_word_len:
+            pairs.append((cts[0], dts[0]))
+    pairs.sort()
+    return _longest_increasing_by_db(pairs)
+
+
+def _longest_increasing_by_db(pairs: Sequence[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """Keep the longest subsequence whose db_time is non-decreasing as caption_time
+    increases (pairs already sorted by caption_time)."""
+    n = len(pairs)
+    if n <= 1:
+        return list(pairs)
+    best = [1] * n
+    prev = [-1] * n
+    for i in range(n):
+        for j in range(i):
+            if pairs[j][1] <= pairs[i][1] and best[j] + 1 > best[i]:
+                best[i] = best[j] + 1
+                prev[i] = j
+    end = max(range(n), key=lambda i: best[i])
+    out: List[Tuple[float, float]] = []
+    while end != -1:
+        out.append(pairs[end])
+        end = prev[end]
+    out.reverse()
+    return out
+
+
+def map_caption_time(anchors: Sequence[Tuple[float, float]], cap_t: float) -> float:
+    """Map a caption timestamp to the session timeline via piecewise-linear
+    interpolation between anchors (constant-offset extrapolation past the ends).
+    Falls back to identity when there are no anchors."""
+    if not anchors:
+        return cap_t
+    caps = [a[0] for a in anchors]
+    if cap_t <= caps[0]:
+        return cap_t + (anchors[0][1] - anchors[0][0])
+    if cap_t >= caps[-1]:
+        return cap_t + (anchors[-1][1] - anchors[-1][0])
+    i = bisect.bisect_right(caps, cap_t) - 1
+    c0, d0 = anchors[i]
+    c1, d1 = anchors[i + 1]
+    if c1 == c0:
+        return d0
+    return d0 + (d1 - d0) * (cap_t - c0) / (c1 - c0)
+
+
+# ---------------------------------------------------------------------------
 # Row labeling
 # ---------------------------------------------------------------------------
 
@@ -332,6 +413,42 @@ def label_rows(
 
     projected = sorted(
         ((float(cw["t_s"]) - offset, str(cw["word"])) for cw in caption_words),  # type: ignore[arg-type]
+        key=lambda x: x[0],
+    )
+    for t, w in projected:
+        idx = _assign_row(t, bounds, pad_s)
+        if idx is not None:
+            buckets[idx].append(w)
+
+    labels: List[RowLabel] = []
+    for row, (start, end), words in zip(rows, bounds, buckets):
+        corrected = " ".join(words)
+        db_text = str(row.get("text") or "")
+        labels.append(RowLabel(
+            transcription_id=row.get("id"),  # type: ignore[arg-type]
+            start_time=start,
+            end_time=end,
+            db_text=db_text,
+            corrected_text=corrected,
+            similarity=_similarity(db_text, corrected),
+        ))
+    return labels
+
+
+def label_rows_anchored(
+    db_rows: Sequence[Dict[str, object]],
+    caption_words: Sequence[Dict[str, object]],
+    anchors: Sequence[Tuple[float, float]],
+    pad_s: float = 0.5,
+) -> List[RowLabel]:
+    """Like `label_rows`, but map each caption word onto the session timeline with
+    the piecewise-linear anchor map (tracking clock drift) instead of one offset."""
+    rows = list(db_rows)
+    bounds = [_row_bounds(r) for r in rows]
+    buckets: List[List[str]] = [[] for _ in rows]
+
+    projected = sorted(
+        ((map_caption_time(anchors, float(cw["t_s"])), str(cw["word"])) for cw in caption_words),  # type: ignore[arg-type]
         key=lambda x: x[0],
     )
     for t, w in projected:

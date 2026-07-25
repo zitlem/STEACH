@@ -99,6 +99,57 @@ def test_estimate_offset_no_overlap_returns_zero():
 
 
 # ---------------------------------------------------------------------------
+# anchor-based alignment + VTT entity decoding
+# ---------------------------------------------------------------------------
+
+def test_parse_vtt_unescapes_html_entities():
+    # YouTube speaker markers ">>" arrive as &gt;&gt; — must not become "gt"/"gtgt".
+    cues = ca.parse_vtt("WEBVTT\n\n00:00:00.000 --> 00:00:02.000\n&gt;&gt; hello &amp; world\n")
+    words = [w["word"] for w in ca.to_word_stream(cues)]
+    assert words == ["hello", "world"]
+
+
+def test_map_caption_time_interpolates_and_extrapolates():
+    anchors = [(10.0, 110.0), (20.0, 140.0)]  # slope 3 between anchors
+    assert ca.map_caption_time(anchors, 15.0) == 125.0   # interpolate
+    assert ca.map_caption_time(anchors, 5.0) == 105.0    # extrapolate before (offset +100)
+    assert ca.map_caption_time(anchors, 25.0) == 145.0   # extrapolate after (offset +120)
+    assert ca.map_caption_time([], 42.0) == 42.0         # identity with no anchors
+
+
+def test_anchored_alignment_tracks_clock_drift():
+    rows = _rows(
+        ("alpha bravo charlie", 0.0, 3.0),
+        ("delta echo foxtrot", 3.0, 6.0),
+        ("golf hotel india", 100.0, 103.0),
+        ("juliet kilo lima", 103.0, 106.0),
+    )
+    # Captions drift mid-service: first block +1000s, second block +2000s.
+    words = [{"word": w, "t_s": t + (1000.0 if t < 50 else 2000.0)}
+             for w, t in ca._db_word_stream(rows)]
+
+    anchors = ca.build_anchors(rows, words)
+    assert len(anchors) >= 6
+    anchored = ca.label_rows_anchored(rows, words, anchors)
+    for lb in anchored:
+        assert lb.similarity == 1.0, (lb.db_text, lb.corrected_text)
+
+    # A single global offset cannot span both blocks.
+    single = ca.estimate_offset(rows, words)
+    single_labels = ca.label_rows(rows, words, single)
+    assert sum(l.similarity for l in single_labels) < sum(l.similarity for l in anchored)
+
+
+def test_build_anchors_drops_backwards_pairs():
+    # Two shared distinctive words, but the second occurs earlier in captions than
+    # the first — a monotonic map can keep only one of them.
+    rows = _rows(("alpha bravo", 0.0, 4.0))
+    words = [{"word": "alpha", "t_s": 100.0}, {"word": "bravo", "t_s": 50.0}]
+    anchors = ca.build_anchors(rows, words)
+    assert len(anchors) == 1
+
+
+# ---------------------------------------------------------------------------
 # label_rows
 # ---------------------------------------------------------------------------
 
