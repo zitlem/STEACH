@@ -1022,6 +1022,7 @@ function renderTlRows() {
       ? `<button class="btn btn-ghost btn-sm" onclick="previewSegment(${i})" title="Play audio">▶</button> <button class="btn btn-ghost btn-sm" onclick="stopPreview()" title="Stop audio">⏹</button>`
       : "";
     const tr = document.createElement("tr");
+    tr.dataset.start = row.start_time; tr.dataset.end = row.end_time;
     if (bk.has(key)) tr.dataset.bookmark = "1";
     tr.innerHTML = `
       <td class="text-mono" style="max-width:350px;word-break:break-word;">${row.text || ""}</td>
@@ -1123,9 +1124,13 @@ function stopPreview() { _previewAudio.pause(); _previewAudio.currentTime = wind
 
 // Follow playback: full-row highlight for the row whose [start,end] contains the time;
 // when between rows, mark the bottom edge of the row just above so position stays visible.
+function _activeTbody() {
+  const tl = document.getElementById("import-tl-pane");
+  return (tl && tl.classList.contains("active")) ? "#tl-tbody" : "#import-tbody";
+}
 function apFollow(t) {
   let containing = null, preceding = null;
-  for (const tr of document.querySelectorAll("#import-tbody tr[data-start]")) {
+  for (const tr of document.querySelectorAll(`${_activeTbody()} tr[data-start]`)) {
     const s = parseFloat(tr.dataset.start), e = parseFloat(tr.dataset.end);
     if (t >= s && t <= e) containing = tr;
     if (e <= t) preceding = tr;  // last row that has already ended
