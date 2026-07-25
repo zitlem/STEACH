@@ -1042,15 +1042,50 @@ function renderImportTable() {
   const showRaw = document.getElementById("import-show-raw")?.checked;
   const esc = s => (s || "").replace(/"/g, "&quot;");
   const escT = s => (s || "").replace(/</g, "&lt;");
+  // Interleave the missed YouTube segments (speech STT skipped) at their time, so the
+  // full YouTube transcript reads inline with the STT rows in chronological order.
+  const missed = (window._ytCoverage || []).filter(c => !c.matched);
+  window._ytMissedSegs = missed;
   let hidden = 0;
+  const items = [];
   importRows.forEach((row, i) => {
     if (hideDenied && row.denied) { hidden++; return; }
+    items.push({ t: (row.start_time || 0), kind: "db", row, i });
+  });
+  missed.forEach((seg, k) => items.push({ t: seg.start_s, kind: "miss", seg, k }));
+  items.sort((a, b) => a.t - b.t);
+
+  const pannsBadge = row => {
+    if (!row.speech_type && !row.audio_tag) return "";
+    const st = row.speech_type || "";
+    const icon = st === "Music" ? "🎵" : st === "Quiet" ? "🔈" : st === "Speaking" ? "🗣" : "🎙";
+    const tag = (row.audio_tag && row.audio_tag !== st) ? ` · ${escT(row.audio_tag)}` : "";
+    const mp = (row.music_prob != null) ? ` (${Math.round(row.music_prob * 100)}%)` : "";
+    return `<div class="text-muted" style="font-size:10px;" title="PANNs audio detection${mp}">${icon} ${escT(st)}${tag}</div>`;
+  };
+
+  items.forEach(it => {
+    const tr = document.createElement("tr");
+    if (it.kind === "miss") {
+      const seg = it.seg, k = it.k;
+      tr.style.background = "rgba(192,57,43,.08)";
+      tr.innerHTML = `
+        <td class="text-mono" style="font-size:11px;vertical-align:top;">${(seg.start_s||0).toFixed(1)}s
+          <div style="color:#c0392b;font-size:10px;" title="YouTube caught speech STT missed">YouTube only</div></td>
+        <td><div class="text-muted" style="font-size:12px;margin-bottom:4px;">STT: <em>(missed — no row)</em></div>
+          <input type="text" class="miss-text-input" value="${esc(seg.text)}" data-k="${k}" title="YouTube caption STT missed — edit to correct"></td>
+        <td class="text-muted">${fmtDuration((seg.end_s||0)-(seg.start_s||0))}</td>
+        <td><button class="btn btn-ghost btn-sm" onclick="previewMissed(${k})" title="Play audio">▶</button></td>
+        <td><button class="btn btn-primary2 btn-sm" id="miss-add-btn-${k}" onclick="addMissedSeg(${k})">Add</button></td>`;
+      tbody.appendChild(tr);
+      return;
+    }
+    const row = it.row, i = it.i;
     const hasAudio = (row.end_time || 0) > (row.start_time || 0);
     const previewCell = hasAudio
       ? `<button class="btn btn-ghost btn-sm" onclick="previewSegment(${i})" title="Play audio">▶</button>`
       : `<span class="text-muted">—</span>`;
-    // Badges in the time cell: rejected reason, and/or YouTube match %.
-    let badges = "";
+    let badges = pannsBadge(row);
     if (row.denied) badges += `<div style="color:#c0392b;font-size:10px;" title="rejected by STT">rejected: ${row.denied_reason || "hidden"}</div>`;
     if (row.yt_drop) {
       badges += `<div style="color:#c0392b;font-size:10px;" title="excluded from training">skip: ${row.yt_drop}</div>`;
@@ -1059,17 +1094,12 @@ function renderImportTable() {
       const col = pct < 50 ? "#c0392b" : (pct < 80 ? "#b7791f" : "#2f855a");
       badges += `<div style="color:${col};font-size:10px;" title="caption vs STT agreement">${pct}% match</div>`;
     }
-    // The editable field holds the YouTube caption when matched (the label to train on);
-    // otherwise the DB text. When matched, show the STT text as a muted reference.
-    // Mirror the translation view: STT text on top as the source, the editable
-    // YouTube caption below as the label to train on.
     const hasYt = row.yt_text != null;
     const fieldVal = hasYt ? row.yt_text : (row.text || "");
     const sttText = (showRaw && row.original_text) ? row.original_text : (row.text || "");
     const ref = hasYt
       ? `<div class="text-muted" style="font-size:12px;margin-bottom:4px;">STT: ${escT(sttText)}</div>`
       : "";
-    const tr = document.createElement("tr");
     if (row.yt_drop || row.denied) tr.style.opacity = "0.45";
     tr.innerHTML = `
       <td class="text-mono" style="font-size:11px;vertical-align:top;">${(row.start_time||0).toFixed(1)}s${badges}</td>
@@ -1083,10 +1113,45 @@ function renderImportTable() {
   if (note) note.textContent = hidden ? `${hidden} rejected row(s) hidden` : "";
 }
 
+// Missed YouTube segment: pad short windows a little so there's audio to play/extract.
+function _missWindow(seg) {
+  let s = Math.max(0, seg.start_s - 0.2);
+  let e = seg.end_s + 0.8;
+  if (e - s < 1.0) e = s + 1.5;
+  return { s, e };
+}
+function previewMissed(k) {
+  const seg = (window._ytMissedSegs || [])[k];
+  const wavPath = document.getElementById("import-wav-path").value.trim();
+  if (!seg || !wavPath) { alert("Select a WAV file first."); return; }
+  const { s, e } = _missWindow(seg);
+  _previewAudio.pause();
+  _previewAudio.src = `/api/preview_audio?wav=${encodeURIComponent(wavPath)}&start=${s}&end=${e}`;
+  _previewAudio.play();
+}
+async function addMissedSeg(k) {
+  const seg = (window._ytMissedSegs || [])[k];
+  const input = document.querySelector(`.miss-text-input[data-k="${k}"]`);
+  const text = input ? input.value.trim() : (seg ? seg.text : "");
+  const wavPath = document.getElementById("import-wav-path").value.trim();
+  if (!text) { alert("No text for this segment."); return; }
+  if (!wavPath) { alert("Select the session WAV first."); return; }
+  const { s, e } = _missWindow(seg);
+  const btn = document.getElementById(`miss-add-btn-${k}`);
+  const res = await fetch("/api/import/extract", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ wav_path: wavPath, source: "youtube_missed", segments: [{ corrected_text: text, start_time: s, end_time: e }] }),
+  });
+  const d = await res.json();
+  if (d.error || !d.results?.[0]?.ok) { alertDiv("import-alert", d.error || d.results?.[0]?.error || "Failed.", "err"); return; }
+  if (btn) { btn.textContent = "✓"; btn.disabled = true; }
+  loadDataset();
+}
+
 document.getElementById("import-search").addEventListener("input", function () {
   const q = this.value.toLowerCase();
   document.querySelectorAll("#import-tbody tr").forEach(tr => {
-    const input = tr.querySelector(".import-text-input");
+    const input = tr.querySelector(".import-text-input, .miss-text-input");
     tr.style.display = (!q || (input && input.value.toLowerCase().includes(q))) ? "" : "none";
   });
 });

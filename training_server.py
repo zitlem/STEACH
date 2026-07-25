@@ -337,7 +337,7 @@ def api_import_list():
             conn.row_factory = sqlite3.Row
             cols = {r[1] for r in conn.execute("PRAGMA table_info(transcriptions)")}
             select = ["id", "timestamp", "text", "start_time", "end_time", "translated_text"]
-            for opt in ("denied", "denied_reason", "speech_type", "original_text"):
+            for opt in ("denied", "denied_reason", "speech_type", "audio_tag", "music_prob", "original_text"):
                 if opt in cols:
                     select.append(opt)
             # Finalized rows only — never the partial/emit hypotheses (is_final = 0).
@@ -483,7 +483,8 @@ def api_import_extract():
 
     wav_path = data.get("wav_path", "").strip()
     segments = data.get("segments", [])
-    results, err = _extract_clips(wav_path, segments)
+    source = data.get("source") or "session_extract"
+    results, err = _extract_clips(wav_path, segments, source=source)
     if err:
         return jsonify({"error": err[0]}), err[1]
     return jsonify({"results": results})
