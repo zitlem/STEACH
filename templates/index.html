@@ -739,17 +739,29 @@ async function loadMatchedSessions() {
     const sim = (typeof r.mean_similarity === "number") ? Math.round(r.mean_similarity * 100) + "%" : "—";
     const title = (r.title || r.video_id || "").toString().replace(/</g, "&lt;");
     const kept = (r.kept != null) ? r.kept : "—";
-    const btn = r.db_path
+    const openBtn = r.db_path
       ? `<button class="btn btn-primary2 btn-sm" onclick="openCachedSession('${(r.db_path).replace(/'/g, "\\'")}')">Open</button>`
       : `<span class="text-muted" title="uploaded without a DB path">n/a</span>`;
+    const delBtn = `<button class="btn btn-danger btn-sm" title="Remove from cache" onclick="deleteMatchedSession('${stem.replace(/'/g, "\\'")}')">Del</button>`;
     html += `<tr><td style="text-align:left;padding:4px 8px;font-family:monospace;">${stem}</td>`
       + `<td style="text-align:left;padding:4px 8px;">${title} <span class="text-muted">(${r.caption_lang || ""})</span></td>`
       + `<td style="padding:4px 8px;text-align:center;">${sim}</td>`
       + `<td style="padding:4px 8px;text-align:center;">${kept}</td>`
-      + `<td style="padding:4px 8px;text-align:right;">${btn}</td></tr>`;
+      + `<td style="padding:4px 8px;text-align:right;white-space:nowrap;">${openBtn} ${delBtn}</td></tr>`;
   });
   html += "</tbody></table>";
   box.innerHTML = html;
+}
+
+// Remove a matched session from the cache (its resolution + orphaned caption file).
+async function deleteMatchedSession(stem) {
+  if (!confirm(`Remove matched session "${stem}" from the cache?\n(The source DB and any built training data are not touched.)`)) return;
+  try {
+    const res = await fetch(`/api/youtube/resolution/${encodeURIComponent(stem)}`, { method: "DELETE" });
+    const d = await res.json();
+    if (d.error) { alert(d.error); return; }
+  } catch (e) { alert("Delete failed: " + e); return; }
+  loadMatchedSessions();
 }
 
 // Open an already-matched session straight from cache: load its DB rows then pull the

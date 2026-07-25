@@ -1180,6 +1180,31 @@ def api_youtube_cache():
     return jsonify({"captions": captions, "resolutions": _load_resolutions()})
 
 
+@app.route("/api/youtube/resolution/<stem>", methods=["DELETE"])
+def api_delete_resolution(stem):
+    """Remove a matched session from the cache: drop its resolution mapping and, if no
+    other session still uses its video, delete that video's cached caption file(s)."""
+    res = _load_resolutions()
+    entry = res.pop(stem, None)
+    if entry is None:
+        return jsonify({"error": "no such matched session"}), 404
+    try:
+        RESOLUTIONS_FILE.write_text(json.dumps(res, indent=2, ensure_ascii=False))
+    except OSError as e:
+        return jsonify({"error": str(e)}), 500
+
+    removed = []
+    vid = entry.get("video_id")
+    if vid and not any(r.get("video_id") == vid for r in res.values()):
+        for p in CAPTION_CACHE_DIR.glob(f"{vid}.*.vtt"):
+            try:
+                p.unlink()
+                removed.append(p.name)
+            except OSError:
+                pass
+    return jsonify({"ok": True, "removed_captions": removed})
+
+
 # --- Training ---
 
 @app.route("/api/start_training", methods=["POST"])
