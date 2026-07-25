@@ -912,13 +912,24 @@ function toggleCoverage() {
     btn.textContent = btn.textContent.replace("▾", "▸");
     return;
   }
+  renderCoverage();
+  box.style.display = "";
+  btn.textContent = btn.textContent.replace("▸", "▾");
+}
+
+function renderCoverage() {
+  const box = document.getElementById("yt-coverage");
   const cov = window._ytCoverage || [];
+  const missedOnly = document.getElementById("cov-missed-only")?.checked || false;
   const esc = s => String(s || "").replace(/</g, "&lt;");
   const fmtT = s => { s = Math.max(0, Math.floor(s)); return `${Math.floor(s/60)}:${String(s%60).padStart(2,"0")}`; };
-  let html = '<div class="table-wrap" style="padding:10px;max-height:420px;overflow-y:auto;font-size:13px;line-height:1.5;">'
-    + '<div class="text-muted" style="font-size:11px;margin-bottom:6px;">Full YouTube transcript. '
-    + '<span style="background:rgba(192,57,43,.15);border-left:3px solid #c0392b;padding:0 4px;">Red = STT missed this speech</span>.</div>';
-  cov.forEach(c => {
+  const missedTotal = cov.filter(c => !c.matched).length;
+  const list = missedOnly ? cov.filter(c => !c.matched) : cov;
+  let html = '<div class="table-wrap" style="padding:10px;max-height:440px;overflow-y:auto;font-size:13px;line-height:1.5;">'
+    + '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;">'
+    + `<label style="font-size:12px;"><input type="checkbox" id="cov-missed-only" ${missedOnly ? "checked" : ""} onchange="renderCoverage()"> show only STT-missed (${missedTotal})</label>`
+    + '<span class="text-muted" style="font-size:11px;"><span style="background:rgba(192,57,43,.15);border-left:3px solid #c0392b;padding:0 4px;">Red = STT missed this speech</span></span></div>';
+  list.forEach(c => {
     if (c.matched) {
       html += `<div style="margin:2px 0;"><span class="text-muted" style="font-family:monospace;font-size:11px;">${fmtT(c.start_s)}</span> ${esc(c.text)}</div>`;
     } else {
@@ -928,8 +939,6 @@ function toggleCoverage() {
   });
   html += "</div>";
   box.innerHTML = html;
-  box.style.display = "";
-  btn.textContent = btn.textContent.replace("▸", "▾");
 }
 
 function switchImportMode(mode, btn) {
