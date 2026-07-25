@@ -37,6 +37,11 @@
   .tab-btn.active.translation { color: var(--accent2); border-bottom-color: var(--accent2); }
   .tab-pane { display: none; }
   tr.now-playing { box-shadow: inset 0 0 0 2px var(--accent, #3b82f6); background: rgba(59,130,246,.10); }
+  .import-text-input, .miss-text-input, .tl-input {
+    width: 100%; box-sizing: border-box; font: inherit; line-height: 1.35;
+    padding: 4px 6px; resize: vertical; overflow: auto; white-space: pre-wrap;
+    field-sizing: content; min-height: 2.1em; max-height: 220px;
+  }
   .tab-pane.active { display: block; }
   .sub-tabs { display:flex; gap:0; border-bottom:1px solid var(--border); margin-bottom:16px; }
   .sub-tab-btn { padding:6px 16px; background:none; border:none; border-bottom:2px solid transparent; color:var(--muted); font-size:13px; font-weight:600; cursor:pointer; margin-bottom:-1px; transition:color .15s,border-color .15s; }
@@ -1011,11 +1016,12 @@ function renderTlRows() {
     if (bk.has(key)) tr.dataset.bookmark = "1";
     tr.innerHTML = `
       <td class="text-mono" style="max-width:350px;word-break:break-word;">${row.text || ""}</td>
-      <td><input type="text" value="${(row.translated_text || "").replace(/"/g, "&quot;")}" placeholder="Type correct translation..." data-i="${i}"></td>
+      <td><textarea class="tl-input" data-i="${i}" oninput="autoGrow(this)" placeholder="Type correct translation...">${escArea(row.translated_text || "")}</textarea></td>
       <td style="white-space:nowrap;">${star} ${av}
         <button class="btn btn-primary2 btn-sm" onclick="addTlPair(${i})">Add</button></td>`;
     tbody.appendChild(tr);
   });
+  autoGrowAll("#tl-tbody textarea");
   const note = document.getElementById("tl-hidden-note");
   if (note) note.textContent = hidden ? `${hidden} rejected row(s) hidden` : "";
 }
@@ -1030,7 +1036,7 @@ document.getElementById("tl-search").addEventListener("input", function () {
 
 async function addTlPair(i) {
   const row = tlDbRows[i];
-  const input = document.querySelector(`#tl-tbody tr:nth-child(${i + 1}) input`);
+  const input = document.querySelector(`.tl-input[data-i="${i}"]`);
   const target = input ? input.value.trim() : "";
   if (!target) { alert("Please enter the translation."); return; }
   const res = await fetch("/api/upload/translation", {
@@ -1065,6 +1071,13 @@ document.getElementById("tl-add-all-btn").addEventListener("click", async () => 
 // ---------------------------------------------------------------------------
 // Shared audio preview player (reused across import rows)
 // ---------------------------------------------------------------------------
+// Auto-growing textareas: escape content for a textarea, and a JS fallback height fit
+// for browsers without CSS field-sizing.
+function escArea(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+const _fieldSizing = !!(window.CSS && CSS.supports && CSS.supports("field-sizing", "content"));
+function autoGrow(el) { if (_fieldSizing || !el) return; el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
+function autoGrowAll(sel) { if (_fieldSizing) return; document.querySelectorAll(sel).forEach(autoGrow); }
+
 const _previewAudio = new Audio();
 window._segStart = 0; window._segEnd = null; window._autoStop = true; window._apWav = "";
 
@@ -1187,7 +1200,7 @@ function renderImportTable() {
         <td class="text-mono" style="font-size:11px;vertical-align:top;">${(seg.start_s||0).toFixed(1)}s
           <div style="color:#c0392b;font-size:10px;" title="YouTube caught speech STT missed">YouTube only</div></td>
         <td><div class="text-muted" style="font-size:12px;margin-bottom:4px;">STT: <em>(missed — no row)</em></div>
-          <input type="text" class="miss-text-input" value="${esc(seg.text)}" data-k="${k}" title="YouTube caption STT missed — edit to correct"></td>
+          <textarea class="miss-text-input" data-k="${k}" oninput="autoGrow(this)" title="YouTube caption STT missed — edit to correct">${escArea(seg.text)}</textarea></td>
         <td class="text-muted">${fmtDuration((seg.end_s||0)-(seg.start_s||0))}</td>
         <td style="white-space:nowrap;">${starBtn(key)}
           <button class="btn btn-ghost btn-sm" onclick="previewMissed(${k})" title="Play audio">▶</button>
@@ -1229,7 +1242,7 @@ function renderImportTable() {
     if (bk.has(key)) tr.dataset.bookmark = "1";
     tr.innerHTML = `
       <td class="text-mono" style="font-size:11px;vertical-align:top;">${(row.start_time||0).toFixed(1)}s${badges}</td>
-      <td>${ref}<input type="text" class="import-text-input" value="${esc(fieldVal)}" data-i="${i}" title="${hasYt ? "YouTube caption — edit to correct" : "STT transcription"}"></td>
+      <td>${ref}<textarea class="import-text-input" data-i="${i}" oninput="autoGrow(this)" title="${hasYt ? "YouTube caption — edit to correct" : "STT transcription"}">${escArea(fieldVal)}</textarea></td>
       <td class="text-muted">${fmtDuration((row.end_time||0)-(row.start_time||0))}</td>
       <td style="white-space:nowrap;">${starBtn(key)} ${previewCell}
         ${hasAudio ? `<button class="btn btn-ghost btn-sm" onclick="stopPreview()" title="Stop audio">⏹</button>` : ""}
@@ -1237,6 +1250,7 @@ function renderImportTable() {
     tbody.appendChild(tr);
   });
   updateJumpBar();
+  autoGrowAll("#import-tbody textarea");
   const note = document.getElementById("import-hidden-note");
   if (note) note.textContent = hidden ? `${hidden} rejected row(s) hidden` : "";
 }
