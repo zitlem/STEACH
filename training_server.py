@@ -337,7 +337,7 @@ def api_import_list():
             conn.row_factory = sqlite3.Row
             cols = {r[1] for r in conn.execute("PRAGMA table_info(transcriptions)")}
             select = ["id", "timestamp", "text", "start_time", "end_time", "translated_text"]
-            for opt in ("denied", "denied_reason", "speech_type"):
+            for opt in ("denied", "denied_reason", "speech_type", "original_text"):
                 if opt in cols:
                     select.append(opt)
             # Finalized rows only — never the partial/emit hypotheses (is_final = 0).
@@ -918,9 +918,10 @@ def _youtube_align(data):
     if not os.path.exists(db_path):
         return None, (f"DB not found: {db_path}", 404)
 
+    speaking_only = bool(data.get("speaking_only", ycfg["speaking_only"]))
     try:
         rows, db_excluded = _read_transcription_rows(
-            db_path, include_denied=ycfg["include_denied"], speaking_only=ycfg["speaking_only"]
+            db_path, include_denied=ycfg["include_denied"], speaking_only=speaking_only
         )
     except Exception as e:
         return None, (str(e), 500)
