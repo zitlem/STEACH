@@ -1,6 +1,7 @@
 import io
 import json
 import os
+import re
 import signal
 import sqlite3
 import subprocess
@@ -54,8 +55,15 @@ MAIN_APP_AUDIO_BACKUP = CONFIG["paths"]["main_app_audio_backup"]
 TRANSLATION_DIR = TRAINING_DATA_DIR / "translation"
 TRANSLATION_MANIFEST = TRANSLATION_DIR / "manifest.jsonl"
 
+# Local caption store: raw VTT keyed by <video_id>.<lang>.vtt, plus resolutions.json
+# mapping a session DB stem -> the resolved video. Lets repeat runs (and re-uploads)
+# skip YouTube entirely. Gitignored.
+CAPTION_CACHE_DIR = TRAINING_DATA_DIR / "caption_cache"
+RESOLUTIONS_FILE = CAPTION_CACHE_DIR / "resolutions.json"
+
 STT_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 TRANSLATION_DIR.mkdir(parents=True, exist_ok=True)
+CAPTION_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 MODELS_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 if not os.access(MODELS_OUTPUT_DIR, os.W_OK):
     print(
@@ -613,6 +621,65 @@ def _yt_channel_videos(channel, date_str, day_window, scan_limit, tabs, coarse_d
     return candidates, None
 
 
+_VID_RE = re.compile(r"(?:v=|youtu\.be/|/live/|/shorts/|/embed/)([A-Za-z0-9_-]{11})")
+
+
+def _video_id_of(target):
+    """Extract an 11-char YouTube video id from an id or any watch/live/short URL."""
+    s = str(target or "").strip()
+    m = _VID_RE.search(s)
+    if m:
+        return m.group(1)
+    return s if re.fullmatch(r"[A-Za-z0-9_-]{11}", s) else s
+
+
+def _caption_cache_path(video_id, lang):
+    return CAPTION_CACHE_DIR / f"{video_id}.{lang}.vtt"
+
+
+def _cache_get_caption(video_id, candidates):
+    """Return (vtt_text, lang) from the local store, or (None, None).
+
+    Tries the requested candidate languages in order; otherwise falls back to any
+    cached track for the video, preferring the original (*-orig)."""
+    if candidates:
+        for c in candidates:
+            p = _caption_cache_path(video_id, c)
+            if p.exists():
+                return p.read_text(encoding="utf-8", errors="replace"), c
+    found = sorted(CAPTION_CACHE_DIR.glob(f"{video_id}.*.vtt"))
+    pick = [p for p in found if p.stem.endswith("-orig")] or found
+    if pick:
+        lang = pick[0].name[len(video_id) + 1:-4]  # strip '<id>.' and '.vtt'
+        return pick[0].read_text(encoding="utf-8", errors="replace"), lang
+    return None, None
+
+
+def _cache_put_caption(video_id, lang, text):
+    try:
+        _caption_cache_path(video_id, lang or "orig").write_text(text, encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _load_resolutions():
+    try:
+        return json.loads(RESOLUTIONS_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_resolution(db_stem, video_id, caption_lang):
+    if not db_stem or not video_id:
+        return
+    res = _load_resolutions()
+    res[db_stem] = {"video_id": video_id, "caption_lang": caption_lang}
+    try:
+        RESOLUTIONS_FILE.write_text(json.dumps(res, indent=2, ensure_ascii=False))
+    except OSError:
+        pass
+
+
 def _video_original_lang(yturl):
     """Return the video's original spoken-language code (e.g. 'ru'), or None."""
     cmd = ["yt-dlp", "--no-warnings", "--skip-download", "--print", "%(language)s", yturl]
@@ -646,13 +713,30 @@ def _caption_lang_candidates(yturl, sub_lang):
     return ordered
 
 
-def _yt_download_captions(target, sub_lang):
-    """Download original-language auto-captions (WebVTT) for a video id/URL.
+def _yt_download_captions(target, sub_lang, allow_fetch=True, force=False):
+    """Get original-language auto-captions (WebVTT) for a video id/URL.
 
-    Returns (vtt_text, used_lang, error).
+    Prefers the local caption store; only hits YouTube on a cache miss (unless
+    force=True). Successful fetches are cached. Returns (vtt_text, used_lang, error).
     """
     yturl = target if str(target).startswith("http") else f"https://youtu.be/{target}"
-    candidates = _caption_lang_candidates(yturl, sub_lang)
+    video_id = _video_id_of(target)
+
+    # Explicit languages can be resolved without any network call; "auto" defers the
+    # language probe until we know the cache missed.
+    sub_lang_norm = (sub_lang or "auto").strip()
+    explicit = None
+    if sub_lang_norm.lower() != "auto":
+        explicit = [c.strip() for c in sub_lang_norm.split(",") if c.strip()]
+
+    if not force:
+        cached_text, cached_lang = _cache_get_caption(video_id, explicit)
+        if cached_text is not None:
+            return cached_text, cached_lang, None
+    if not allow_fetch:
+        return None, None, "no cached captions for this video (upload a bundle or enable fetching)"
+
+    candidates = explicit or _caption_lang_candidates(yturl, "auto")
     if not candidates:
         return None, None, "could not determine a caption language (set youtube.sub_lang)"
 
@@ -706,6 +790,7 @@ def _yt_download_captions(target, sub_lang):
         text = chosen.read_text(encoding="utf-8", errors="replace")
     finally:
         cleanup()
+    _cache_put_caption(video_id, chosen_lang, text)  # store for reuse
     return text, chosen_lang, None
 
 
@@ -774,10 +859,18 @@ def _youtube_align(data):
     if not rows:
         return None, ("no labelable rows in DB", 400)
     session = ca.session_datetime(rows)
+    db_stem = Path(db_path).stem
+    refresh = bool(data.get("refresh"))
+    use_cache = data.get("use_cache", True)
 
-    # 1) pick the video (explicit override wins)
+    # 1) pick the video (explicit override wins, then cached resolution, then YouTube)
     resolved = None
     video_target = (data.get("video_url") or "").strip()
+    if not video_target and use_cache and not refresh:
+        cached_res = _load_resolutions().get(db_stem)
+        if cached_res and cached_res.get("video_id"):
+            video_target = cached_res["video_id"]
+            resolved = {**cached_res, "from_cache": True}
     if not video_target:
         if not channel:
             return None, ("no YouTube channel or video_url provided", 400)
@@ -796,10 +889,13 @@ def _youtube_align(data):
         video_target = pick["video_id"]
         resolved = pick
 
-    # 2) download auto-captions (original language by default)
-    vtt_text, used_lang, err = _yt_download_captions(video_target, sub_lang)
+    # 2) get captions (local store first; YouTube only on a miss unless refresh)
+    vtt_text, used_lang, err = _yt_download_captions(
+        video_target, sub_lang, allow_fetch=True, force=refresh
+    )
     if err:
         return None, (err, 502)
+    _save_resolution(db_stem, _video_id_of(video_target), used_lang)
 
     # 3) align + label + filter
     cues = ca.parse_vtt(vtt_text)
@@ -903,7 +999,7 @@ def api_youtube_export():
     vtt = payload.get("_captions_vtt", "") or ""
     db_path = payload.get("_db_path", "") or ""
     lang = payload.get("caption_lang") or "orig"
-    public = _public(payload)
+    public = {**_public(payload), "db_name": Path(db_path).name}
 
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
@@ -922,6 +1018,71 @@ def api_youtube_export():
     stem = Path(db_path).stem or "session"
     return send_file(buf, mimetype="application/zip", as_attachment=True,
                      download_name=f"steach_debug_{stem}.zip")
+
+
+@app.route("/api/youtube/import_bundle", methods=["POST"])
+def api_youtube_import_bundle():
+    """Re-upload a debug bundle (or a raw .vtt) into the local caption store so
+    future runs skip YouTube.
+
+    - multipart 'bundle': a steach_debug_*.zip (captions.*.vtt + alignment.json).
+      Captions are cached by the alignment's video id, and the session DB stem is
+      mapped to that video so resolution is skipped too.
+    - multipart 'captions' + form 'video_id' (+ optional 'lang', 'db_stem'): store a
+      single caption file directly.
+    """
+    stored = []
+    f = request.files.get("bundle")
+    if f:
+        try:
+            with zipfile.ZipFile(io.BytesIO(f.read())) as z:
+                names = z.namelist()
+                video_id, caption_lang, db_name = None, None, None
+                if "alignment.json" in names:
+                    meta = json.loads(z.read("alignment.json").decode("utf-8", "replace"))
+                    video_id = _video_id_of(meta.get("video") or "")
+                    caption_lang = meta.get("caption_lang")
+                    db_name = meta.get("db_name")
+                for n in names:
+                    if n.startswith("captions.") and n.endswith(".vtt"):
+                        file_lang = n[len("captions."):-len(".vtt")]
+                        vtt = z.read(n).decode("utf-8", "replace")
+                        lang = caption_lang or file_lang
+                        if video_id:
+                            _cache_put_caption(video_id, lang, vtt)
+                            stored.append(f"{video_id}.{lang}")
+                if video_id and db_name:
+                    _save_resolution(Path(db_name).stem, video_id, caption_lang)
+        except (zipfile.BadZipFile, KeyError, json.JSONDecodeError) as e:
+            return jsonify({"error": f"invalid bundle: {e}"}), 400
+        if not stored:
+            return jsonify({"error": "bundle had no captions/alignment to import"}), 400
+        return jsonify({"ok": True, "cached": stored})
+
+    cap = request.files.get("captions")
+    if cap:
+        video_id = _video_id_of(request.form.get("video_id", ""))
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id or ""):
+            return jsonify({"error": "captions upload requires a valid 'video_id'"}), 400
+        lang = (request.form.get("lang") or "orig").strip()
+        _cache_put_caption(video_id, lang, cap.read().decode("utf-8", "replace"))
+        db_stem = (request.form.get("db_stem") or "").strip()
+        if db_stem:
+            _save_resolution(db_stem, video_id, lang)
+        return jsonify({"ok": True, "cached": [f"{video_id}.{lang}"]})
+
+    return jsonify({"error": "no file uploaded (field 'bundle' or 'captions')"}), 400
+
+
+@app.route("/api/youtube/cache")
+def api_youtube_cache():
+    """List the locally cached captions and session->video resolutions."""
+    captions = []
+    for p in sorted(CAPTION_CACHE_DIR.glob("*.vtt")):
+        stem = p.stem  # <video_id>.<lang>
+        vid, _, lang = stem.partition(".")
+        captions.append({"video_id": vid, "lang": lang, "bytes": p.stat().st_size})
+    return jsonify({"captions": captions, "resolutions": _load_resolutions()})
 
 
 # --- Training ---

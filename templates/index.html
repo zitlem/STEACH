@@ -214,7 +214,13 @@
       <div id="yt-alert"></div>
       <div id="yt-report" style="display:none;margin-bottom:14px;"></div>
       <button class="btn btn-primary" id="yt-build-btn" style="display:none;margin-bottom:14px;" onclick="ytBuildDataset()">Build training set from reviewed rows</button>
-      <button class="btn btn-ghost btn-sm" id="yt-debug-btn" style="margin-bottom:14px;" onclick="ytDownloadDebug()" title="Download the DB, raw captions and alignment result as a zip for review">⤓ Download debug bundle (DB + captions + alignment)</button>
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:14px;">
+        <button class="btn btn-ghost btn-sm" id="yt-debug-btn" onclick="ytDownloadDebug()" title="Download the DB, raw captions and alignment result as a zip for review">⤓ Download debug bundle (DB + captions + alignment)</button>
+        <label style="font-size:12px;color:var(--text-muted,#888);"><input type="checkbox" id="yt-refresh"> re-fetch from YouTube (ignore cache)</label>
+        <span style="flex:1;"></span>
+        <input type="file" id="yt-bundle-file" accept=".zip" style="font-size:12px;max-width:230px;">
+        <button class="btn btn-ghost btn-sm" onclick="ytUploadBundle()" title="Store a previously-downloaded bundle's captions on the server so future runs skip YouTube">⤒ Upload bundle to server</button>
+      </div>
       <div id="import-alert"></div>
       <div id="import-toggle-row" style="display:none;margin-top:12px;">
         <button class="btn btn-ghost btn-sm" id="import-toggle-btn" onclick="
@@ -634,7 +640,7 @@ document.getElementById("yt-autolabel-btn").addEventListener("click", async () =
     const res = await fetch("/api/youtube/preview", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ db_path: dbPath, channel, wav_path: wavInput.value.trim() }),
+      body: JSON.stringify({ db_path: dbPath, channel, wav_path: wavInput.value.trim(), refresh: document.getElementById("yt-refresh").checked }),
     });
     const data = await res.json();
     if (data.error) {
@@ -731,6 +737,24 @@ async function ytBuildDataset() {
   }
 }
 
+// Re-upload a previously-downloaded debug bundle so its captions are cached on the
+// server and future runs for that session skip YouTube entirely.
+async function ytUploadBundle() {
+  const input = document.getElementById("yt-bundle-file");
+  if (!input.files || !input.files[0]) { alertDiv("yt-alert", "Choose a bundle .zip first.", "err"); return; }
+  const fd = new FormData();
+  fd.append("bundle", input.files[0]);
+  alertDiv("yt-alert", "Uploading bundle to server…", "");
+  try {
+    const res = await fetch("/api/youtube/import_bundle", { method: "POST", body: fd });
+    const d = await res.json();
+    if (d.error) { alertDiv("yt-alert", d.error, "err"); return; }
+    alertDiv("yt-alert", `Cached ${(d.cached || []).length} caption track(s) on the server — future runs for this session will skip YouTube.`, "ok");
+  } catch (e) {
+    alertDiv("yt-alert", "Upload failed: " + e, "err");
+  }
+}
+
 // Download a debug bundle (session DB + raw captions + full alignment result) as a
 // zip, so the alignment can be reviewed offline. Re-runs resolve+captions server-side.
 async function ytDownloadDebug() {
@@ -746,7 +770,7 @@ async function ytDownloadDebug() {
   try {
     const res = await fetch("/api/youtube/export", {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ db_path: dbPath, channel }),
+      body: JSON.stringify({ db_path: dbPath, channel, refresh: document.getElementById("yt-refresh").checked }),
     });
     const ct = res.headers.get("content-type") || "";
     if (!res.ok || ct.includes("application/json")) {
