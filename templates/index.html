@@ -249,11 +249,15 @@
         <!-- STT Training sub-pane -->
         <div id="import-stt-pane" class="sub-tab-pane active">
           <div id="import-table-wrap" class="table-wrap" style="display:none;">
-            <input type="text" id="import-search" placeholder="Search transcriptions..." style="width:100%;margin-bottom:10px;">
+            <div style="display:flex;gap:12px;align-items:center;margin-bottom:10px;">
+              <input type="text" id="import-search" placeholder="Search transcriptions..." style="flex:1;">
+              <label style="font-size:12px;white-space:nowrap;color:var(--text-muted,#888);"><input type="checkbox" id="import-hide-denied" checked onchange="renderImportTable()"> hide rejected rows</label>
+              <span id="import-hidden-note" class="text-muted" style="font-size:11px;white-space:nowrap;"></span>
+            </div>
             <table id="import-table">
               <thead><tr>
                 <th>Time</th>
-                <th>Transcription (edit to correct)</th>
+                <th>Transcription — editable label (YouTube caption when matched; STT shown below)</th>
                 <th style="width:70px;">Duration</th>
                 <th style="width:90px;">Preview</th>
                 <th style="width:80px;"></th>
@@ -668,16 +672,17 @@ async function runAutoLabelPreview(opts = {}) {
       return;
     }
 
-    // Merge corrected text into the loaded rows for review (matched by DB row id).
+    // Merge the YouTube caption alongside the DB text (don't overwrite it) so both
+    // are visible, like the translation source/target view. Matched by DB row id.
     const byId = new Map(importRows.map(r => [r.id, r]));
     window._ytDropped = new Set();
     (data.kept || []).forEach(l => {
       const r = byId.get(l.transcription_id);
-      if (r) { r.text = l.corrected_text; r.yt_sim = l.similarity; r.yt_drop = null; }
+      if (r) { r.yt_text = l.corrected_text; r.yt_sim = l.similarity; r.yt_drop = null; }
     });
     (data.dropped || []).forEach(l => {
       const r = byId.get(l.transcription_id);
-      if (r) { r.yt_sim = l.similarity; r.yt_drop = l.drop_reason; window._ytDropped.add(r.id); }
+      if (r) { r.yt_text = l.corrected_text; r.yt_sim = l.similarity; r.yt_drop = l.drop_reason; window._ytDropped.add(r.id); }
     });
     if (data.wav_path && !wavInput.value.trim()) wavInput.value = data.wav_path;
     document.getElementById("import-loaded-wrap").style.display = "";
@@ -968,30 +973,45 @@ function renderImportTable() {
   wrap.style.display = "";
   document.getElementById("import-search").value = "";
   tbody.innerHTML = "";
+  const hideDenied = document.getElementById("import-hide-denied")?.checked;
+  const esc = s => (s || "").replace(/"/g, "&quot;");
+  const escT = s => (s || "").replace(/</g, "&lt;");
+  let hidden = 0;
   importRows.forEach((row, i) => {
+    if (hideDenied && row.denied) { hidden++; return; }
     const hasAudio = (row.end_time || 0) > (row.start_time || 0);
     const previewCell = hasAudio
       ? `<button class="btn btn-ghost btn-sm" onclick="previewSegment(${i})" title="Play audio">▶</button>`
       : `<span class="text-muted">—</span>`;
-    // YouTube auto-label review badges (only present after an Auto-label preview).
-    let ytBadge = "";
+    // Badges in the time cell: rejected reason, and/or YouTube match %.
+    let badges = "";
+    if (row.denied) badges += `<div style="color:#c0392b;font-size:10px;" title="rejected by STT">rejected: ${row.denied_reason || "hidden"}</div>`;
     if (row.yt_drop) {
-      ytBadge = `<div style="color:#c0392b;font-size:10px;" title="excluded from training">skip: ${row.yt_drop}</div>`;
+      badges += `<div style="color:#c0392b;font-size:10px;" title="excluded from training">skip: ${row.yt_drop}</div>`;
     } else if (row.yt_sim != null) {
       const pct = Math.round(row.yt_sim * 100);
       const col = pct < 50 ? "#c0392b" : (pct < 80 ? "#b7791f" : "#2f855a");
-      ytBadge = `<div style="color:${col};font-size:10px;" title="caption vs original agreement">${pct}% match</div>`;
+      badges += `<div style="color:${col};font-size:10px;" title="caption vs STT agreement">${pct}% match</div>`;
     }
+    // The editable field holds the YouTube caption when matched (the label to train on);
+    // otherwise the DB text. When matched, show the STT text as a muted reference.
+    const hasYt = row.yt_text != null;
+    const fieldVal = hasYt ? row.yt_text : (row.text || "");
+    const ref = hasYt
+      ? `<div class="text-muted" style="font-size:11px;margin-top:3px;">STT: ${escT(row.text)}</div>`
+      : "";
     const tr = document.createElement("tr");
-    if (row.yt_drop) tr.style.opacity = "0.45";
+    if (row.yt_drop || row.denied) tr.style.opacity = "0.45";
     tr.innerHTML = `
-      <td class="text-mono" style="font-size:11px;">${(row.start_time||0).toFixed(1)}s${ytBadge}</td>
-      <td><input type="text" class="import-text-input" value="${(row.text || "").replace(/"/g, "&quot;")}" data-i="${i}"></td>
+      <td class="text-mono" style="font-size:11px;">${(row.start_time||0).toFixed(1)}s${badges}</td>
+      <td><input type="text" class="import-text-input" value="${esc(fieldVal)}" data-i="${i}" title="${hasYt ? "YouTube caption — edit to correct" : "STT transcription"}">${ref}</td>
       <td class="text-muted">${fmtDuration((row.end_time||0)-(row.start_time||0))}</td>
       <td>${previewCell}</td>
       <td><button class="btn btn-primary2 btn-sm" id="import-add-btn-${i}" onclick="addSttRow(${i})">Add</button></td>`;
     tbody.appendChild(tr);
   });
+  const note = document.getElementById("import-hidden-note");
+  if (note) note.textContent = hidden ? `${hidden} rejected row(s) hidden` : "";
 }
 
 document.getElementById("import-search").addEventListener("input", function () {

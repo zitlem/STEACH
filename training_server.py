@@ -335,12 +335,17 @@ def api_import_list():
     try:
         with sqlite3.connect(f"file:{db_path}?immutable=1", uri=True) as conn:
             conn.row_factory = sqlite3.Row
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(transcriptions)")}
+            select = ["id", "timestamp", "text", "start_time", "end_time", "translated_text"]
+            for opt in ("denied", "denied_reason", "speech_type"):
+                if opt in cols:
+                    select.append(opt)
             where = "WHERE text IS NOT NULL AND trim(text) != '' AND start_time IS NOT NULL"
             total_count = conn.execute(
                 f"SELECT COUNT(*) FROM transcriptions {where}"
             ).fetchone()[0]
             query = (
-                f"SELECT id, timestamp, text, start_time, end_time, translated_text "
+                f"SELECT {', '.join(select)} "
                 f"FROM transcriptions {where} ORDER BY start_time ASC"
             )
             params = []
