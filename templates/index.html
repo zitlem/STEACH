@@ -271,7 +271,7 @@
               <input type="text" id="import-search" placeholder="Search transcriptions..." style="flex:1;">
               <label style="font-size:12px;white-space:nowrap;color:var(--text-muted,#888);"><input type="checkbox" id="import-hide-denied" checked onchange="renderImportTable()"> hide rejected rows</label>
               <label style="font-size:12px;white-space:nowrap;color:var(--text-muted,#888);" title="Show the raw pre-correction STT text (original_text) as the reference"><input type="checkbox" id="import-show-raw" onchange="renderImportTable()"> raw STT</label>
-              <label style="font-size:12px;white-space:nowrap;color:var(--text-muted,#888);" title="Interleave the YouTube segments STT missed into the table at their time"><input type="checkbox" id="import-show-missed" checked onchange="renderImportTable()"> YouTube gaps inline</label>
+              <label style="font-size:12px;white-space:nowrap;color:var(--text-muted,#888);" title="Interleave the YouTube-only segments (no STT row, e.g. songs) into the table at their time"><input type="checkbox" id="import-show-missed" checked onchange="renderImportTable()"> YouTube gaps inline</label>
               <span id="import-hidden-note" class="text-muted" style="font-size:11px;white-space:nowrap;"></span>
             </div>
             <table id="import-table">
@@ -766,7 +766,7 @@ async function runAutoLabelPreview(opts = {}) {
          Video: <code>${data.video || ""}</code> &nbsp;|&nbsp; captions: <strong>${data.caption_lang || "?"}</strong> &nbsp;|&nbsp; time offset: ${data.offset}s<br>
          Rows to keep: <strong>${(data.kept || []).length}</strong> &nbsp;|&nbsp; skipped as junk: ${drops}<br>
          Mean caption↔original agreement: <strong>${sim}</strong> (low-match rows: ${rep.low_match_count ?? 0})<br>
-         STT missed: <strong>${data.missed_count ?? 0}</strong> caption segment(s) — speech YouTube caught that STT didn't<br>
+         YouTube-only: <strong>${data.missed_count ?? 0}</strong> caption segment(s) with no STT row (mostly songs/music STT filters out)<br>
          <div class="text-muted" style="font-size:11px;margin-top:6px;">
            Scan the corrected text in the table below (skipped rows are greyed out and excluded).
            Edit anything that looks wrong, then click <strong>Build training set</strong>. Low agreement
@@ -778,7 +778,7 @@ async function runAutoLabelPreview(opts = {}) {
     window._ytCoverage = data.coverage || [];
     const covBtn = document.getElementById("yt-coverage-btn");
     document.getElementById("yt-coverage").style.display = "none";
-    covBtn.textContent = `▸ Full YouTube transcript (${(data.missed_count ?? 0)} segment(s) STT missed)`;
+    covBtn.textContent = `▸ Full YouTube transcript (${(data.missed_count ?? 0)} YouTube-only segments)`;
     covBtn.style.display = window._ytCoverage.length ? "" : "none";
     if ((data.kept || []).length) {
       buildBtn.textContent = `Build training set from reviewed rows (${(data.kept || []).length})`;
@@ -981,14 +981,14 @@ function renderCoverage() {
   const list = missedOnly ? cov.filter(c => !c.matched) : cov;
   let html = '<div class="table-wrap" style="padding:10px;max-height:440px;overflow-y:auto;font-size:13px;line-height:1.5;">'
     + '<div style="display:flex;gap:12px;align-items:center;margin-bottom:8px;">'
-    + `<label style="font-size:12px;"><input type="checkbox" id="cov-missed-only" ${missedOnly ? "checked" : ""} onchange="renderCoverage()"> show only STT-missed (${missedTotal})</label>`
-    + '<span class="text-muted" style="font-size:11px;"><span style="background:rgba(192,57,43,.15);border-left:3px solid #c0392b;padding:0 4px;">Red = STT missed this speech</span></span></div>';
+    + `<label style="font-size:12px;"><input type="checkbox" id="cov-missed-only" ${missedOnly ? "checked" : ""} onchange="renderCoverage()"> show only YouTube-only (${missedTotal})</label>`
+    + '<span class="text-muted" style="font-size:11px;"><span style="background:rgba(192,57,43,.15);border-left:3px solid #c0392b;padding:0 4px;">Red = YouTube-only (no STT row — e.g. singing)</span></span></div>';
   list.forEach(c => {
     if (c.matched) {
       html += `<div style="margin:2px 0;"><span class="text-muted" style="font-family:monospace;font-size:11px;">${fmtT(c.start_s)}</span> ${esc(c.text)}</div>`;
     } else {
       html += `<div style="margin:2px 0;background:rgba(192,57,43,.15);border-left:3px solid #c0392b;padding:3px 6px;">`
-        + `<span style="color:#c0392b;font-family:monospace;font-size:11px;">${fmtT(c.start_s)} MISSED</span> ${esc(c.text)}</div>`;
+        + `<span style="color:#c0392b;font-family:monospace;font-size:11px;">${fmtT(c.start_s)} YT-ONLY</span> ${esc(c.text)}</div>`;
     }
   });
   html += "</div>";
@@ -1224,9 +1224,9 @@ function renderImportTable() {
       if (bk.has(key)) tr.dataset.bookmark = "1";
       tr.innerHTML = `
         <td class="text-mono" style="font-size:11px;vertical-align:top;">${(seg.start_s||0).toFixed(1)}s
-          <div style="color:#c0392b;font-size:10px;" title="YouTube caught speech STT missed">YouTube only</div></td>
-        <td><div class="text-muted" style="font-size:12px;margin-bottom:4px;">STT: <em>(missed — no row)</em></div>
-          <textarea class="miss-text-input" data-k="${k}" oninput="autoGrow(this)" title="YouTube caption STT missed — edit to correct">${escArea(seg.text)}</textarea></td>
+          <div style="color:#c0392b;font-size:10px;" title="YouTube-only — no STT row (e.g. singing/music STT skips)">YouTube only</div></td>
+        <td><div class="text-muted" style="font-size:12px;margin-bottom:4px;">STT: <em>(no row — e.g. song)</em></div>
+          <textarea class="miss-text-input" data-k="${k}" oninput="autoGrow(this)" title="YouTube-only caption (no STT row) — edit to correct">${escArea(seg.text)}</textarea></td>
         <td class="text-muted">${fmtDuration((seg.end_s||0)-(seg.start_s||0))}</td>
         <td style="white-space:nowrap;">${starBtn(key)}
           <button class="btn btn-ghost btn-sm" onclick="previewMissed(${k})" title="Play audio">▶</button>
