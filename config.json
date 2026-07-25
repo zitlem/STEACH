@@ -7,7 +7,7 @@
     "training_data_dir": "training_data/",
     "models_output_dir": "/home/ai/STT/models/",
     "main_app_db": "/home/ai/STT/transcriptions.db",
-    "main_app_audio_backup": "/home/ai/STT/_AUTOMATIC_BACKUP/"
+    "main_app_audio_backup": "/home/ai/.stt/_AUTOMATIC_BACKUP/"
   },
   "training": {
     "base_model": "openai/whisper-medium",
