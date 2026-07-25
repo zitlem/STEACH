@@ -37,6 +37,8 @@
   .tab-btn.active.translation { color: var(--accent2); border-bottom-color: var(--accent2); }
   .tab-pane { display: none; }
   tr.now-playing { box-shadow: inset 0 0 0 2px var(--accent, #3b82f6); background: rgba(59,130,246,.10); }
+  /* Playback is in the gap after this row: mark just its bottom edge so position is still visible. */
+  tr.now-playing-gap > td { box-shadow: inset 0 -3px 0 0 var(--accent, #3b82f6); }
   .import-text-input, .miss-text-input, .tl-input {
     width: 100%; box-sizing: border-box; font: inherit; line-height: 1.35;
     padding: 4px 6px; resize: vertical; overflow: auto; white-space: pre-wrap;
@@ -1110,23 +1112,26 @@ function apToggle() { if (_previewAudio.paused) _previewAudio.play(); else _prev
 function apSkip(d) { const dur = _previewAudio.duration || 0; _previewAudio.currentTime = Math.min(dur, Math.max(0, _previewAudio.currentTime + d)); window._autoStop = false; }
 function apSeek(v) { _previewAudio.currentTime = parseFloat(v) || 0; window._autoStop = false; }
 function apContinue() { window._autoStop = false; if (_previewAudio.paused) _previewAudio.play(); }
-function _apClearRow() { if (window._apRow) { window._apRow.classList.remove("now-playing"); window._apRow = null; } }
+function _apClearRow() { if (window._apRow) { window._apRow.classList.remove("now-playing", "now-playing-gap"); window._apRow = null; window._apState = null; } }
 function stopPreview() { _previewAudio.pause(); _previewAudio.currentTime = window._segStart || 0; apShow(false); _apClearRow(); }
 
-// Follow playback: highlight (and optionally scroll to) the table row whose [start,end]
-// window contains the current time.
+// Follow playback: full-row highlight for the row whose [start,end] contains the time;
+// when between rows, mark the bottom edge of the row just above so position stays visible.
 function apFollow(t) {
-  const cur = window._apRow;
-  if (cur && t >= parseFloat(cur.dataset.start) && t <= parseFloat(cur.dataset.end)) return;  // still in it
-  let target = null;
+  let containing = null, preceding = null;
   for (const tr of document.querySelectorAll("#import-tbody tr[data-start]")) {
-    if (t >= parseFloat(tr.dataset.start) && t <= parseFloat(tr.dataset.end)) { target = tr; break; }
+    const s = parseFloat(tr.dataset.start), e = parseFloat(tr.dataset.end);
+    if (t >= s && t <= e) containing = tr;
+    if (e <= t) preceding = tr;  // last row that has already ended
   }
-  if (target === cur) return;
+  const target = containing || preceding;
+  const state = containing ? "in" : "gap";
+  if (target === window._apRow && state === window._apState) return;
   _apClearRow();
   if (target) {
-    target.classList.add("now-playing");
+    target.classList.add(state === "in" ? "now-playing" : "now-playing-gap");
     window._apRow = target;
+    window._apState = state;
     if (document.getElementById("ap-follow")?.checked) target.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 }
