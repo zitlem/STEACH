@@ -49,7 +49,7 @@ def parse_stem_date(stem):
 def discover_dbs(backup_dir, since, until):
     """Yield (path, date) for session .db files in [since, until], sorted by date."""
     found = []
-    for p in Path(backup_dir).rglob("*.db"):
+    for p in Path(backup_dir).expanduser().rglob("*.db"):
         if not p.is_file():
             continue
         d = parse_stem_date(p.stem)
