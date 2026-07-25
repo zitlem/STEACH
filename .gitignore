@@ -7,6 +7,7 @@ __pycache__/
 *.pyo
 .env
 ui_state.json
+bookmarks.json
 server.log
 server.pid
 match_output/

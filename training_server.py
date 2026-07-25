@@ -62,6 +62,24 @@ def load_state():
 
 def save_state(state):
     STATE_FILE.write_text(json.dumps(state, indent=2))
+
+# Per-session bookmarks (session db-stem -> list of row keys). Kept in STEACH (the STT
+# DB is opened read-only), gitignored.
+BOOKMARKS_FILE = Path("bookmarks.json")
+
+
+def _load_bookmarks():
+    try:
+        return json.loads(BOOKMARKS_FILE.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_bookmarks(data):
+    try:
+        BOOKMARKS_FILE.write_text(json.dumps(data, indent=2))
+    except OSError:
+        pass
 TRAINING_DATA_DIR = Path(CONFIG["paths"]["training_data_dir"])
 STT_DIR = TRAINING_DATA_DIR / "stt"
 STT_AUDIO_DIR = STT_DIR / "audio"
@@ -1198,6 +1216,37 @@ def api_youtube_cache():
         vid, _, lang = stem.partition(".")
         captions.append({"video_id": vid, "lang": lang, "bytes": p.stat().st_size})
     return jsonify({"captions": captions, "resolutions": _load_resolutions()})
+
+
+@app.route("/api/bookmarks")
+def api_bookmarks_get():
+    """List the bookmarked row keys for a session (db_stem)."""
+    stem = (request.args.get("db_stem") or "").strip()
+    keys = _load_bookmarks().get(stem, []) if stem else []
+    return jsonify({"keys": keys})
+
+
+@app.route("/api/bookmarks", methods=["POST"])
+def api_bookmarks_set():
+    """Add/remove a bookmark. Body: {db_stem, key, on}."""
+    data = request.get_json() or {}
+    stem = (data.get("db_stem") or "").strip()
+    key = (data.get("key") or "").strip()
+    if not stem or not key:
+        return jsonify({"error": "db_stem and key required"}), 400
+    books = _load_bookmarks()
+    keys = books.get(stem, [])
+    if data.get("on"):
+        if key not in keys:
+            keys.append(key)
+    else:
+        keys = [k for k in keys if k != key]
+    if keys:
+        books[stem] = keys
+    else:
+        books.pop(stem, None)
+    _save_bookmarks(books)
+    return jsonify({"ok": True, "keys": keys})
 
 
 @app.route("/api/youtube/resolution/<stem>", methods=["DELETE"])

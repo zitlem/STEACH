@@ -492,6 +492,23 @@
   </div>
 </div>
 
+<!-- Sticky jump-to-next bar (navigation only) -->
+<div id="jump-bar" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:900;background:var(--surface);border-top:1px solid var(--border);box-shadow:0 -2px 10px rgba(0,0,0,.25);">
+  <div style="max-width:1500px;margin:0 auto;padding:10px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+    <strong style="font-size:13px;">Jump to next:</strong>
+    <select id="jump-cat" style="font-size:13px;padding:4px 8px;">
+      <option value="music">🎵 Music detected</option>
+      <option value="yt">🔴 YouTube only (missed)</option>
+      <option value="rejected">🚫 Rejected rows</option>
+      <option value="low">⚠ Low match (&lt;50%)</option>
+      <option value="bookmark">★ Bookmarks</option>
+    </select>
+    <button class="btn btn-ghost btn-sm" onclick="jumpTo(-1)">◂ Prev</button>
+    <button class="btn btn-primary btn-sm" onclick="jumpTo(1)">Next ▸</button>
+    <span id="jump-count" class="text-muted" style="font-size:12px;"></span>
+  </div>
+</div>
+
 <script>
 // ---------------------------------------------------------------------------
 // Socket.IO
@@ -632,6 +649,7 @@ async function loadImportDb() {
   toggleRow.style.display = "";
   document.getElementById("import-toggle-btn").textContent = "▲ Hide";
   document.getElementById("import-loaded-wrap").style.display = "";
+  await loadBookmarks();
   renderImportTable();
   updateTlSummary();
   renderTlRows();
@@ -1066,19 +1084,25 @@ function renderImportTable() {
     const mp = (row.music_prob != null) ? ` (${Math.round(row.music_prob * 100)}%)` : "";
     return `<div class="text-muted" style="font-size:10px;" title="PANNs audio detection${mp}">${icon} ${escT(st)}${tag}</div>`;
   };
+  const bk = window._bookmarks || (window._bookmarks = new Set());
+  const starBtn = key => `<button class="btn btn-ghost btn-sm" onclick="toggleBookmark('${key}',this)" title="Bookmark" style="${bk.has(key) ? "color:#f0b429;" : ""}">${bk.has(key) ? "★" : "☆"}</button>`;
 
   items.forEach(it => {
     const tr = document.createElement("tr");
     if (it.kind === "miss") {
       const seg = it.seg, k = it.k;
+      const key = `miss:${seg.start_s}`;
       tr.style.background = "rgba(192,57,43,.08)";
+      tr.dataset.key = key;
+      tr.dataset.yt = "1";
+      if (bk.has(key)) tr.dataset.bookmark = "1";
       tr.innerHTML = `
         <td class="text-mono" style="font-size:11px;vertical-align:top;">${(seg.start_s||0).toFixed(1)}s
           <div style="color:#c0392b;font-size:10px;" title="YouTube caught speech STT missed">YouTube only</div></td>
         <td><div class="text-muted" style="font-size:12px;margin-bottom:4px;">STT: <em>(missed — no row)</em></div>
           <input type="text" class="miss-text-input" value="${esc(seg.text)}" data-k="${k}" title="YouTube caption STT missed — edit to correct"></td>
         <td class="text-muted">${fmtDuration((seg.end_s||0)-(seg.start_s||0))}</td>
-        <td><button class="btn btn-ghost btn-sm" onclick="previewMissed(${k})" title="Play audio">▶</button></td>
+        <td>${starBtn(key)} <button class="btn btn-ghost btn-sm" onclick="previewMissed(${k})" title="Play audio">▶</button></td>
         <td><button class="btn btn-primary2 btn-sm" id="miss-add-btn-${k}" onclick="addMissedSeg(${k})">Add</button></td>`;
       tbody.appendChild(tr);
       return;
@@ -1104,17 +1128,95 @@ function renderImportTable() {
       ? `<div class="text-muted" style="font-size:12px;margin-bottom:4px;">STT: ${escT(sttText)}</div>`
       : "";
     if (row.yt_drop || row.denied) tr.style.opacity = "0.45";
+    const key = `row:${row.id}`;
+    tr.dataset.key = key;
+    if (row.speech_type === "Music") tr.dataset.music = "1";
+    if (row.denied) tr.dataset.rejected = "1";
+    if (row.yt_sim != null && row.yt_sim < 0.5) tr.dataset.low = "1";
+    if (bk.has(key)) tr.dataset.bookmark = "1";
     tr.innerHTML = `
       <td class="text-mono" style="font-size:11px;vertical-align:top;">${(row.start_time||0).toFixed(1)}s${badges}</td>
       <td>${ref}<input type="text" class="import-text-input" value="${esc(fieldVal)}" data-i="${i}" title="${hasYt ? "YouTube caption — edit to correct" : "STT transcription"}"></td>
       <td class="text-muted">${fmtDuration((row.end_time||0)-(row.start_time||0))}</td>
-      <td>${previewCell}</td>
+      <td>${starBtn(key)} ${previewCell}</td>
       <td><button class="btn btn-primary2 btn-sm" id="import-add-btn-${i}" onclick="addSttRow(${i})">Add</button></td>`;
     tbody.appendChild(tr);
   });
+  updateJumpBar();
   const note = document.getElementById("import-hidden-note");
   if (note) note.textContent = hidden ? `${hidden} rejected row(s) hidden` : "";
 }
+
+// ---------------------------------------------------------------------------
+// Bookmarks (per session, persisted server-side) + sticky jump-to-next bar
+// ---------------------------------------------------------------------------
+window._bookmarks = window._bookmarks || new Set();
+function dbStem() {
+  const p = document.getElementById("import-db-path").value.trim()
+    || document.getElementById("import-db-path").placeholder.trim();
+  return p.split("/").pop().replace(/\.db$/i, "");
+}
+async function loadBookmarks() {
+  const stem = dbStem();
+  window._bookmarks = new Set();
+  if (!stem) return;
+  try {
+    const d = await (await fetch(`/api/bookmarks?db_stem=${encodeURIComponent(stem)}`)).json();
+    window._bookmarks = new Set(d.keys || []);
+  } catch (e) { /* ignore */ }
+}
+async function toggleBookmark(key, btn) {
+  const on = !window._bookmarks.has(key);
+  if (on) window._bookmarks.add(key); else window._bookmarks.delete(key);
+  if (btn) { btn.textContent = on ? "★" : "☆"; btn.style.color = on ? "#f0b429" : ""; }
+  const tr = btn && btn.closest("tr");
+  if (tr) { if (on) tr.dataset.bookmark = "1"; else delete tr.dataset.bookmark; }
+  updateJumpBar();
+  try {
+    await fetch("/api/bookmarks", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ db_stem: dbStem(), key, on }),
+    });
+  } catch (e) { /* ignore */ }
+}
+
+const _jumpSel = { music: "[data-music]", yt: "[data-yt]", rejected: "[data-rejected]", low: "[data-low]", bookmark: "[data-bookmark]" };
+window._jumpIdx = {};
+function jumpRows() {
+  const cat = document.getElementById("jump-cat").value;
+  return Array.from(document.querySelectorAll(`#import-tbody tr${_jumpSel[cat] || ""}`))
+    .filter(tr => tr.style.display !== "none");
+}
+function updateJumpBar() {
+  const bar = document.getElementById("jump-bar");
+  if (!bar) return;
+  const shown = document.getElementById("import-loaded-wrap")?.style.display !== "none" && importRows.length;
+  bar.style.display = shown ? "" : "none";
+  if (shown) updateJumpCount();
+}
+function updateJumpCount() {
+  const rows = jumpRows();
+  const cat = document.getElementById("jump-cat").value;
+  const i = window._jumpIdx[cat];
+  const pos = (i != null && rows.length) ? `${(i % rows.length) + 1} / ${rows.length}` : `${rows.length}`;
+  document.getElementById("jump-count").textContent = rows.length ? pos : "none";
+}
+function jumpTo(dir) {
+  const cat = document.getElementById("jump-cat").value;
+  const rows = jumpRows();
+  if (!rows.length) { document.getElementById("jump-count").textContent = "none"; return; }
+  let i = window._jumpIdx[cat];
+  i = (i == null) ? (dir > 0 ? 0 : rows.length - 1) : (i + dir);
+  i = ((i % rows.length) + rows.length) % rows.length;
+  window._jumpIdx[cat] = i;
+  const tr = rows[i];
+  tr.scrollIntoView({ behavior: "smooth", block: "center" });
+  const prev = tr.style.boxShadow;
+  tr.style.boxShadow = "inset 0 0 0 2px var(--accent, #3b82f6)";
+  setTimeout(() => { tr.style.boxShadow = prev; }, 1200);
+  updateJumpCount();
+}
+document.getElementById("jump-cat")?.addEventListener("change", () => updateJumpCount());
 
 // Missed YouTube segment: pad short windows a little so there's audio to play/extract.
 function _missWindow(seg) {
