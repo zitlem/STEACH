@@ -294,7 +294,11 @@
             <span id="tl-summary" class="text-muted" style="font-size:13px;"></span>
             <button class="btn btn-primary" id="tl-add-all-btn">Add All Translation Pairs</button>
           </div>
-          <input type="text" id="tl-search" placeholder="Search transcriptions..." style="width:100%;margin-bottom:10px;">
+          <div style="display:flex;gap:12px;align-items:center;margin-bottom:10px;">
+            <input type="text" id="tl-search" placeholder="Search transcriptions..." style="flex:1;">
+            <label style="font-size:12px;white-space:nowrap;color:var(--text-muted,#888);"><input type="checkbox" id="tl-hide-denied" checked onchange="renderTlRows()"> hide rejected rows</label>
+            <span id="tl-hidden-note" class="text-muted" style="font-size:11px;white-space:nowrap;"></span>
+          </div>
           <table>
             <thead><tr>
               <th>Transcribed Text (source)</th>
@@ -907,7 +911,10 @@ function renderTlRows() {
   const tbody = document.getElementById("tl-tbody");
   document.getElementById("tl-search").value = "";
   tbody.innerHTML = "";
+  const hideDenied = document.getElementById("tl-hide-denied")?.checked;
+  let hidden = 0;
   tlDbRows.forEach((row, i) => {
+    if (hideDenied && row.denied) { hidden++; return; }
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td class="text-mono" style="max-width:350px;word-break:break-word;">${row.text || ""}</td>
@@ -915,6 +922,8 @@ function renderTlRows() {
       <td><button class="btn btn-primary2 btn-sm" onclick="addTlPair(${i})">Add</button></td>`;
     tbody.appendChild(tr);
   });
+  const note = document.getElementById("tl-hidden-note");
+  if (note) note.textContent = hidden ? `${hidden} rejected row(s) hidden` : "";
 }
 
 document.getElementById("tl-search").addEventListener("input", function () {
