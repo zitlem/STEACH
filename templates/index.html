@@ -766,7 +766,7 @@ async function runAutoLabelPreview(opts = {}) {
          Video: <code>${data.video || ""}</code> &nbsp;|&nbsp; captions: <strong>${data.caption_lang || "?"}</strong> &nbsp;|&nbsp; time offset: ${data.offset}s<br>
          Rows to keep: <strong>${(data.kept || []).length}</strong> &nbsp;|&nbsp; skipped as junk: ${drops}<br>
          Mean caption↔original agreement: <strong>${sim}</strong> (low-match rows: ${rep.low_match_count ?? 0})<br>
-         YouTube-only: <strong>${data.missed_count ?? 0}</strong> caption segment(s) with no STT row (mostly songs/music STT filters out)<br>
+         YouTube-only segments: <strong>${data.missed_count ?? 0}</strong> of ${(data.coverage || []).length} YouTube caption blocks have no STT row (mostly songs/music STT filters out)<br>
          <div class="text-muted" style="font-size:11px;margin-top:6px;">
            Scan the corrected text in the table below (skipped rows are greyed out and excluded).
            Edit anything that looks wrong, then click <strong>Build training set</strong>. Low agreement
@@ -778,7 +778,7 @@ async function runAutoLabelPreview(opts = {}) {
     window._ytCoverage = data.coverage || [];
     const covBtn = document.getElementById("yt-coverage-btn");
     document.getElementById("yt-coverage").style.display = "none";
-    covBtn.textContent = `▸ Full YouTube transcript (${(data.missed_count ?? 0)} YouTube-only segments)`;
+    covBtn.textContent = `▸ Full YouTube transcript (${window._ytCoverage.length} segments · ${(data.missed_count ?? 0)} YouTube-only)`;
     covBtn.style.display = window._ytCoverage.length ? "" : "none";
     if ((data.kept || []).length) {
       buildBtn.textContent = `Build training set from reviewed rows (${(data.kept || []).length})`;
