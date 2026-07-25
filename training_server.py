@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import signal
@@ -7,12 +8,13 @@ import sys
 import threading
 import time
 import uuid
+import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import soundfile as sf
 import numpy as np
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 from flask_socketio import SocketIO
 
 import caption_align as ca
@@ -826,6 +828,8 @@ def _youtube_align(data):
         "wav_path": wav_path,
         "offset": round(offset, 2),
         "report": report,
+        "_captions_vtt": vtt_text,   # private: consumed by the debug export
+        "_db_path": db_path,
         "session": session,
         "kept": [lb.to_dict() for lb in kept],
         "dropped": [lb.to_dict() for lb in dropped],
@@ -837,6 +841,11 @@ def _youtube_align(data):
 def _youtube_error_response(err):
     body, status = err
     return jsonify(body if isinstance(body, dict) else {"error": body}), status
+
+
+def _public(payload):
+    """Drop private underscore-prefixed keys (raw VTT, db path) before returning JSON."""
+    return {k: v for k, v in payload.items() if not k.startswith("_")}
 
 
 @app.route("/api/youtube/preview", methods=["POST"])
@@ -851,10 +860,9 @@ def api_youtube_preview():
     if err:
         return _youtube_error_response(err)
     if not payload["kept"]:
-        payload = {**payload,
-                   "error": "no rows survived filtering — check channel/date/language"}
-        return jsonify(payload), 422
-    return jsonify(payload)
+        return jsonify({**_public(payload),
+                        "error": "no rows survived filtering — check channel/date/language"}), 422
+    return jsonify(_public(payload))
 
 
 @app.route("/api/youtube/build_dataset", methods=["POST"])
@@ -866,7 +874,7 @@ def api_youtube_build_dataset():
     if err:
         return _youtube_error_response(err)
     if not payload["kept"]:
-        return jsonify({**payload, "error": "no rows survived filtering"}), 422
+        return jsonify({**_public(payload), "error": "no rows survived filtering"}), 422
 
     segments = [
         {"corrected_text": lb["corrected_text"],
@@ -875,11 +883,45 @@ def api_youtube_build_dataset():
     ]
     results, xerr = _extract_clips(payload["wav_path"], segments, source="youtube_autolabel")
     if xerr:
-        return jsonify({**payload, "error": f"clip extraction failed: {xerr[0]}"}), xerr[1]
+        return jsonify({**_public(payload), "error": f"clip extraction failed: {xerr[0]}"}), xerr[1]
 
-    payload["ok"] = True
-    payload["clips_saved"] = sum(1 for r in results if r.get("ok"))
-    return jsonify(payload)
+    out = _public(payload)
+    out["ok"] = True
+    out["clips_saved"] = sum(1 for r in results if r.get("ok"))
+    return jsonify(out)
+
+
+@app.route("/api/youtube/export", methods=["POST"])
+def api_youtube_export():
+    """Build a debug bundle (zip) for review: the session DB, the raw captions, and
+    the full alignment result (rows, labels, similarities, offset, report). Body same
+    as /api/youtube/preview."""
+    payload, err = _youtube_align(request.get_json() or {})
+    if err:
+        return _youtube_error_response(err)
+
+    vtt = payload.get("_captions_vtt", "") or ""
+    db_path = payload.get("_db_path", "") or ""
+    lang = payload.get("caption_lang") or "orig"
+    public = _public(payload)
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr(f"captions.{lang}.vtt", vtt)
+        z.writestr("alignment.json", json.dumps(public, ensure_ascii=False, indent=2))
+        if db_path and os.path.exists(db_path):
+            z.write(db_path, arcname="session.db")
+        z.writestr("README.txt",
+                   "STEACH YouTube auto-label debug bundle\n"
+                   "- session.db      : the source STT session database\n"
+                   "- captions.*.vtt  : raw YouTube captions used as the reference\n"
+                   "- alignment.json  : resolved video, time offset, per-row db_text vs\n"
+                   "                    caption-derived corrected_text, similarity, and\n"
+                   "                    drop reasons, plus the match report.\n")
+    buf.seek(0)
+    stem = Path(db_path).stem or "session"
+    return send_file(buf, mimetype="application/zip", as_attachment=True,
+                     download_name=f"steach_debug_{stem}.zip")
 
 
 # --- Training ---

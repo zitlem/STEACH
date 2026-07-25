@@ -214,6 +214,7 @@
       <div id="yt-alert"></div>
       <div id="yt-report" style="display:none;margin-bottom:14px;"></div>
       <button class="btn btn-primary" id="yt-build-btn" style="display:none;margin-bottom:14px;" onclick="ytBuildDataset()">Build training set from reviewed rows</button>
+      <button class="btn btn-ghost btn-sm" id="yt-debug-btn" style="margin-bottom:14px;" onclick="ytDownloadDebug()" title="Download the DB, raw captions and alignment result as a zip for review">⤓ Download debug bundle (DB + captions + alignment)</button>
       <div id="import-alert"></div>
       <div id="import-toggle-row" style="display:none;margin-top:12px;">
         <button class="btn btn-ghost btn-sm" id="import-toggle-btn" onclick="
@@ -727,6 +728,49 @@ async function ytBuildDataset() {
   } finally {
     buildBtn.disabled = false;
     buildBtn.textContent = old;
+  }
+}
+
+// Download a debug bundle (session DB + raw captions + full alignment result) as a
+// zip, so the alignment can be reviewed offline. Re-runs resolve+captions server-side.
+async function ytDownloadDebug() {
+  const dbPath = document.getElementById("import-db-path").value.trim()
+    || document.getElementById("import-db-path").placeholder.trim();
+  const channel = document.getElementById("yt-channel").value.trim();
+  if (!channel) { alertDiv("yt-alert", "Enter a YouTube channel first.", "err"); return; }
+  const btn = document.getElementById("yt-debug-btn");
+  btn.disabled = true;
+  const old = btn.textContent;
+  btn.textContent = "Building bundle…";
+  alertDiv("yt-alert", "Building debug bundle (resolving + captions)…", "");
+  try {
+    const res = await fetch("/api/youtube/export", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ db_path: dbPath, channel }),
+    });
+    const ct = res.headers.get("content-type") || "";
+    if (!res.ok || ct.includes("application/json")) {
+      const d = await res.json().catch(() => ({}));
+      alertDiv("yt-alert", d.error || "Export failed.", "err");
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    const cd = res.headers.get("content-disposition") || "";
+    const m = cd.match(/filename="?([^"]+)"?/);
+    a.download = m ? m[1] : "steach_debug.zip";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    alertDiv("yt-alert", "Debug bundle downloaded.", "ok");
+  } catch (e) {
+    alertDiv("yt-alert", "Export failed: " + e, "err");
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
   }
 }
 
