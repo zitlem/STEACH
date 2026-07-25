@@ -507,7 +507,7 @@
       <option value="low">⚠ Low match (&lt; %)</option>
       <option value="bookmark">★ Bookmarks</option>
     </select>
-    <label id="jump-low-wrap" style="display:none;font-size:12px;white-space:nowrap;">&lt; <input type="number" id="jump-low-pct" value="50" min="1" max="100" style="width:52px;font-size:12px;" onchange="updateJumpCount()" oninput="updateJumpCount()">%</label>
+    <label id="jump-low-wrap" style="display:none;font-size:12px;white-space:nowrap;">&lt; <input type="number" id="jump-low-pct" value="50" min="1" max="100" style="width:70px;font-size:12px;padding:2px 4px;" onchange="updateJumpCount()" oninput="updateJumpCount()">%</label>
     <button class="btn btn-ghost btn-sm" onclick="jumpTo(-1)">◂ Prev</button>
     <button class="btn btn-primary btn-sm" onclick="jumpTo(1)">Next ▸</button>
     <span id="jump-count" class="text-muted" style="font-size:12px;cursor:pointer;white-space:nowrap;" ondblclick="editJumpPos()" title="Double-click to jump to a position"></span>
