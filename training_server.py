@@ -455,61 +455,144 @@ def _read_transcription_rows(db_path):
     return [dict(r) for r in rows]
 
 
-def _channel_videos_url(channel):
-    """Normalize a channel handle/id/URL into a channel videos-tab URL."""
+def _channel_tab_urls(channel, tabs):
+    """Build the tab URLs to search for a channel handle/id/URL.
+
+    Live services live under /streams for many churches, uploads under /videos, so
+    by default we search both and merge. An explicit URL (with its own tab) is used
+    as-is.
+    """
     c = (channel or "").strip()
     if not c:
-        return ""
+        return []
     if c.startswith("http"):
-        return c
+        return [c]
     if c.startswith("@"):
-        return f"https://www.youtube.com/{c}/videos"
-    if c.startswith("UC"):
-        return f"https://www.youtube.com/channel/{c}/videos"
-    return f"https://www.youtube.com/@{c}/videos"
+        base = f"https://www.youtube.com/{c}"
+    elif c.startswith("UC"):
+        base = f"https://www.youtube.com/channel/{c}"
+    else:
+        base = f"https://www.youtube.com/@{c}"
+    return [f"{base}/{t}" for t in tabs]
 
 
-def _yt_channel_videos(channel, date_str, day_window, scan_limit):
-    """List a channel's videos near `date_str` (YYYY-MM-DD) via yt-dlp.
+def _dt_yyyymmdd(value):
+    if not value:
+        return None
+    try:
+        return datetime.strptime(str(value), "%Y%m%d")
+    except ValueError:
+        return None
 
-    Returns (candidates, error). candidates are dicts
-    {id, upload_date, title, duration}. Narrowed by --dateafter/--datebefore and
-    bounded by --playlist-end so it stays fast on large channels.
+
+def _parse_video_lines(stdout):
+    """Parse tab-separated 'id\\tupload_date\\tduration\\ttitle' yt-dlp --print lines."""
+    out = []
+    for line in stdout.splitlines():
+        parts = line.split("\t")
+        if not parts or not parts[0]:
+            continue
+        up = parts[1] if len(parts) > 1 else ""
+        dur = 0.0
+        if len(parts) > 2:
+            try:
+                dur = float(parts[2])
+            except ValueError:
+                dur = 0.0
+        title = parts[3] if len(parts) > 3 else ""
+        out.append({"id": parts[0], "upload_date": up, "duration": dur, "title": title})
+    return out
+
+
+def _yt_flat_list(url, scan_limit):
+    """Fast flat channel-tab listing with approximate upload dates.
+
+    approximate_date is exact for recent videos and coarsens for older ones, so it
+    is used only to shortlist candidates; exact dates are confirmed later when the
+    fast tight-window match comes up empty. Returns (entries, error).
     """
-    url = _channel_videos_url(channel)
-    if not url:
-        return None, "no channel configured"
-    center = datetime.strptime(date_str, "%Y-%m-%d")
-    after = (center - timedelta(days=day_window)).strftime("%Y%m%d")
-    before = (center + timedelta(days=day_window)).strftime("%Y%m%d")
     cmd = [
         "yt-dlp", "--ignore-errors", "--no-warnings", "--skip-download",
-        "--playlist-end", str(scan_limit),
-        "--dateafter", after, "--datebefore", before,
-        "--print", "%(id)s\t%(upload_date)s\t%(title)s\t%(duration)s",
+        "--flat-playlist", "--playlist-end", str(scan_limit),
+        "--extractor-args", "youtubetab:approximate_date",
+        "--print", "%(id)s\t%(upload_date)s\t%(duration)s\t%(title)s",
         url,
     ]
     try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
     except FileNotFoundError:
         return None, "yt-dlp is not installed (pip install yt-dlp)"
     except subprocess.TimeoutExpired:
         return None, "yt-dlp channel listing timed out"
+    return _parse_video_lines(proc.stdout), None
 
-    candidates = []
-    for line in proc.stdout.splitlines():
-        parts = line.split("\t")
-        if len(parts) < 2 or not parts[0]:
+
+def _yt_exact_meta(video_id):
+    """Extract the exact upload_date/duration for one video. Returns dict or None."""
+    cmd = [
+        "yt-dlp", "--no-warnings", "--skip-download",
+        "--print", "%(id)s\t%(upload_date)s\t%(duration)s\t%(title)s",
+        f"https://youtu.be/{video_id}",
+    ]
+    try:
+        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return None
+    parsed = _parse_video_lines(proc.stdout)
+    return parsed[0] if parsed else None
+
+
+def _yt_channel_videos(channel, date_str, day_window, scan_limit, tabs, coarse_days):
+    """Resolve candidate videos near `date_str` (YYYY-MM-DD) across the channel tabs.
+
+    Fast path: flat-list each tab (~1s) and keep videos whose approximate date is in
+    the tight window — approximate dates are exact for recent videos, which is the
+    common case. Fallback (older sessions, where approximate dates round coarser):
+    widen the shortlist and confirm each candidate's exact date. Returns
+    (candidates, error); candidates are {id, upload_date, title, duration}.
+    """
+    urls = _channel_tab_urls(channel, tabs)
+    if not urls:
+        return None, "no channel configured"
+    center = datetime.strptime(date_str, "%Y-%m-%d")
+
+    merged = {}
+    listing_err = None
+    any_ok = False
+    for url in urls:
+        entries, err = _yt_flat_list(url, scan_limit)
+        if err:
+            listing_err = err
             continue
-        vid, up = parts[0], parts[1]
-        title = parts[2] if len(parts) > 2 else ""
-        dur = 0.0
-        if len(parts) > 3:
-            try:
-                dur = float(parts[3])
-            except ValueError:
-                dur = 0.0
-        candidates.append({"id": vid, "upload_date": up, "title": title, "duration": dur})
+        any_ok = True
+        for e in entries:
+            merged.setdefault(e["id"], e)  # first tab wins on dup
+    if not any_ok:
+        return None, listing_err or "yt-dlp could not list the channel"
+
+    def in_window(lo_days, hi_days):
+        lo, hi = center - timedelta(days=lo_days), center + timedelta(days=hi_days)
+        return {vid: e for vid, e in merged.items()
+                if (_dt_yyyymmdd(e.get("upload_date")) or datetime.min) >= lo
+                and (_dt_yyyymmdd(e.get("upload_date")) or datetime.max) <= hi}
+
+    # Fast path: approximate date already accurate for recent videos.
+    tight = in_window(day_window, day_window + 1)
+    if tight:
+        return list(tight.values()), None
+
+    # Fallback: approximate dates round newer for old videos — widen, then confirm
+    # exact dates for the shortlist so the ±day_window match stays correct.
+    wide = in_window(2, coarse_days)
+    candidates = []
+    for vid, e in wide.items():
+        exact = _yt_exact_meta(vid)
+        candidates.append({
+            "id": vid,
+            "upload_date": (exact or {}).get("upload_date") or e.get("upload_date"),
+            "duration": (exact or {}).get("duration") or e.get("duration") or 0.0,
+            "title": e.get("title", ""),
+        })
     return candidates, None
 
 
@@ -549,11 +632,14 @@ def _yt_download_captions(target, sub_lang):
 
 def _youtube_cfg():
     yt = CONFIG.get("youtube", {}) if isinstance(CONFIG, dict) else {}
+    tabs = yt.get("tabs") or ["streams", "videos"]
     return {
         "channel": yt.get("channel", ""),
         "sub_lang": yt.get("sub_lang", "en"),
         "day_window": int(yt.get("day_window", 1)),
-        "scan_limit": int(yt.get("scan_limit", 200)),
+        "scan_limit": int(yt.get("scan_limit", 300)),
+        "tabs": list(tabs),
+        "coarse_days": int(yt.get("coarse_days", 30)),
     }
 
 
@@ -578,7 +664,8 @@ def api_youtube_resolve():
         return jsonify({"error": "could not determine session date from DB"}), 400
 
     candidates, err = _yt_channel_videos(
-        channel, session["date"], ycfg["day_window"], ycfg["scan_limit"]
+        channel, session["date"], ycfg["day_window"], ycfg["scan_limit"],
+        ycfg["tabs"], ycfg["coarse_days"]
     )
     if err:
         return jsonify({"error": err}), 502
@@ -618,7 +705,8 @@ def _youtube_align(data):
         if not session.get("date"):
             return None, ("could not determine session date from DB", 400)
         candidates, err = _yt_channel_videos(
-            channel, session["date"], ycfg["day_window"], ycfg["scan_limit"]
+            channel, session["date"], ycfg["day_window"], ycfg["scan_limit"],
+            ycfg["tabs"], ycfg["coarse_days"]
         )
         if err:
             return None, (err, 502)

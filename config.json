@@ -34,6 +34,8 @@
     "channel": "",
     "sub_lang": "en",
     "day_window": 1,
-    "scan_limit": 200
+    "scan_limit": 300,
+    "tabs": ["streams", "videos"],
+    "coarse_days": 30
   }
 }
