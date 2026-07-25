@@ -716,6 +716,7 @@ def _cache_get_caption(video_id, candidates):
             p = _caption_cache_path(video_id, c)
             if p.exists():
                 return p.read_text(encoding="utf-8", errors="replace"), c
+        return None, None  # explicit langs requested but not cached — never substitute another lang
     found = sorted(CAPTION_CACHE_DIR.glob(f"{video_id}.*.vtt"))
     pick = [p for p in found if p.stem.endswith("-orig")] or found
     if pick:
